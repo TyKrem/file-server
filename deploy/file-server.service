@@ -1,0 +1,20 @@
+[Unit]
+Description=file.tykrem.top file server
+After=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=FILE_HOST=127.0.0.1
+Environment=FILE_PORT=8801
+Environment=FILE_ROOT=/opt/file-server/root
+Environment=FILE_MAX_BYTES=21474836480
+ExecStart=/opt/node/bin/node /opt/file-server/server/server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
