@@ -270,11 +270,13 @@ async function handleApi(req, res, u) {
       const dest = path.join(pathInfo.abs, name);
       try {
         await fsp.stat(dest);
+        req.resume();
         return sendJson(res, 409, { error: '同名文件已存在' });
       } catch (e) {}
       const used = await getUsage(true);
       const available = Math.max(0, CAP_BYTES - used);
       if (Number(req.headers['content-length']) > available) {
+        req.resume();
         return sendJson(res, 413, { error: '超过 20GB 磁盘配额' });
       }
       try {
@@ -304,6 +306,10 @@ async function handleApi(req, res, u) {
       }
       await ensureInside(pathInfo.abs);
       const dest = path.join(path.dirname(pathInfo.abs), newName);
+      try {
+        await fsp.stat(dest);
+        return sendJson(res, 409, { error: '目标名称已存在' });
+      } catch (e) {}
       await fsp.rename(pathInfo.abs, dest);
       return sendJson(res, 200, { ok: true });
     }
