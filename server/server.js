@@ -250,11 +250,21 @@ async function handleApi(req, res, u) {
     if (req.method === 'POST' && p === '/api/mkdir') {
       const body = await readJson(req);
       const pathInfo = decodePath(body.path || '/');
-      const name = String(body.name || '').replace(/[\\/]/g, '').trim();
-      if (!pathInfo || !name || name === '.' || name === '..') return sendJson(res, 400, { error: '参数无效' });
-      await parentInside(pathInfo.abs);
+      const name = String(body.name || '').trim();
+      if (!pathInfo) return sendJson(res, 400, { error: '参数无效' });
+      if (!name || name === '.' || name === '..' || /[\\/]/.test(name)) {
+        return sendJson(res, 400, { error: '文件夹名称不能包含路径分隔符，只需填写名称' });
+      }
+      await ensureInside(pathInfo.abs);
+      const dirStat = await fsp.stat(pathInfo.abs);
+      if (!dirStat.isDirectory()) return sendJson(res, 400, { error: '当前位置不是文件夹' });
       const dest = path.join(pathInfo.abs, name);
-      await fsp.mkdir(dest);
+      try {
+        await fsp.mkdir(dest);
+      } catch (e) {
+        if (e && e.code === 'EEXIST') return sendJson(res, 409, { error: '同名文件夹已存在' });
+        throw e;
+      }
       usageCache.ts = 0;
       return sendJson(res, 200, { ok: true });
     }
