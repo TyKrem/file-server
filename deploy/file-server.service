@@ -1,11 +1,13 @@
 [Unit]
-Description=file.tykrem.top file server
+Description=file-server (static file site with admin write access)
 After=network-online.target
 
 [Service]
 Type=simple
 User=root
 Group=root
+# 可选覆盖：存在 /etc/file-server.env 时优先使用其中的值
+EnvironmentFile=-/etc/file-server.env
 Environment=FILE_HOST=127.0.0.1
 Environment=FILE_PORT=8801
 Environment=FILE_ROOT=/opt/file-server/root
