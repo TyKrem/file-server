@@ -26,3 +26,7 @@ cp /root/file-server/server/server.js /opt/file-server/server/server.js
 systemctl restart file-server
 nginx -t && systemctl reload nginx
 ```
+
+## License
+
+MIT
