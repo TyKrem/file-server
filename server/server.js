@@ -74,6 +74,12 @@ function decodePath(raw) {
   if (raw == null || raw === '') return { rel: '/', abs: ROOT };
   let s = String(raw);
   try { s = decodeURIComponent(s); } catch (e) {}
+  // 浏览器会把中文路径做百分号编码，但 curl 之类的客户端可能直接发原始 UTF-8 字节，
+  // Node 按 latin1 解出来就是乱码，这里能还原成合法 UTF-8 时还原一次
+  if (/[\u0080-\u00ff]/.test(s)) {
+    const utf8 = Buffer.from(s, 'latin1').toString('utf8');
+    if (utf8.indexOf('\uFFFD') < 0) s = utf8;
+  }
   s = s.replace(/\\/g, '/');
   if (!s.startsWith('/')) s = '/' + s;
   const norm = path.normalize(s);
@@ -160,8 +166,15 @@ function contentType(name) {
 }
 
 function sendError(res, err) {
-  const status = err && err.status ? err.status : 500;
-  const message = err && err.message ? err.message : '服务器错误';
+  let status = err && err.status ? err.status : 500;
+  let message = err && err.message ? err.message : '服务器错误';
+  // 文件不存在（含中文名解错、真被删了）按 404 回，不当作服务端故障
+  if (!status || status === 500) {
+    if (err && err.code === 'ENOENT') {
+      status = 404;
+      message = '文件不存在';
+    }
+  }
   if (status >= 500) console.error(message, err && err.stack || '');
   sendJson(res, status, { error: message });
 }
@@ -235,7 +248,8 @@ async function handleApi(req, res, u) {
       return sendJson(res, 200, { used: await getUsage(false), cap: CAP_BYTES });
     }
     if (req.method === 'GET' && p === '/api/download') {
-      return handleDownload(req, res, u);
+      // 必须 await：否则下载里的异常会绕过这里的 catch，变成未处理拒绝把进程带崩
+      return await handleDownload(req, res, u);
     }
     if (req.method === 'POST' && p === '/api/session') {
       const body = await readJson(req);
@@ -385,7 +399,9 @@ async function copyTree(src, dest) {
 const server = http.createServer(function (req, res) {
   const u = new URL(req.url || '/', 'http://localhost');
   if (u.pathname.indexOf('/api/') === 0) {
-    handleApi(req, res, u);
+    handleApi(req, res, u).catch(function (err) {
+      try { sendError(res, err); } catch (e) {}
+    });
     return;
   }
   sendJson(res, 404, { error: '请通过 /api/ 访问' });
