@@ -701,7 +701,9 @@
 
   $('upload-btn').addEventListener('click', function () { $('file-input').click(); });
   $('file-input').addEventListener('change', function () {
-    var files = $('file-input').files;
+    // 必须先把文件拷进数组再清空 value：给 value 赋值会把 FileList 原地清空，
+    // 直接传 input.files 会拿到空列表，表现为「选了文件但什么都没发生」
+    var files = Array.prototype.slice.call($('file-input').files || []);
     $('file-input').value = '';
     uploadFiles(files);
   });
