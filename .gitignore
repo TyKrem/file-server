@@ -1,0 +1,6 @@
+# 密钥不进仓库（真实值放 /etc/*.env）
+*.env
+!*.env.example
+
+# 在仓库里直接 go build 产生的二进制
+/file-server

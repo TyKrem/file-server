@@ -9,7 +9,7 @@
 - 管理码解锁写操作（上传 / 删除 / 重命名 / 移动 / 复制 / 新建目录）
 - 路径限制在根目录内，`..`、绝对路径等越界访问一律拒绝
 - 配额上限，上传与复制前检查
-- 单文件 Node 服务，无外部依赖
+- **单二进制 Go 服务**，编译出来直接跑，目标机器不需要装运行时
 
 ## 安全约束
 
@@ -30,7 +30,9 @@ cd file-server
 
 mkdir -p /opt/file-server/root /opt/file-server/data
 cp -a public/. /opt/file-server/public/
-cp server/server.js /opt/file-server/server/
+
+# 只用到标准库 + golang.org/x/text（中文排序），编译成单个可执行文件
+go build -ldflags="-s -w" -o /opt/file-server/file-server ./server
 
 cat > /etc/file-server.env <<'EOF'
 FILE_PORT=8801
@@ -44,6 +46,29 @@ chmod 600 /etc/file-server.env
 
 systemd 单元参考 `deploy/file-server.service`，站点配置参考
 `deploy/nginx.http.conf`（签证书用）与 `deploy/nginx.https.conf`（HTTPS）。
+
+nginx 负责托管 `public/` 下的静态页，只有 `/api/` 反代给这个服务。
+
+## 实现说明
+
+### 为什么用 Go
+
+这类服务天生适合 Go：单个静态二进制、目标机器不用装运行时、并发 IO 不用自己管。
+原来那版是 Node，目录占用统计要 `execFile('du', ...)` 甩给系统命令；现在自己走
+目录，不需要 fork 进程。
+
+### 与 Node 版的差异
+
+重写时对着原实现做了逐请求比对（两份实例、相同的测试数据、同一串请求，比响应也
+比落盘结果），下面两处是刻意保留的差异：
+
+| 项 | Node 版 | Go 版 | 说明 |
+| --- | --- | --- | --- |
+| 用量统计 | `du -sb`（含目录 inode 大小）| 累加普通文件字节 | 少了 fork，读数更接近实际文件体积 |
+| 中文排序 | `localeCompare(x, 'zh-CN')`（ICU）| x/text + 自建分档 | ICU 会给中文做脚本重排（汉字排拉丁前），x/text 的 `Reorder` 尚未实现，所以自己分了「符号→数字→汉字→拉丁→其他」 |
+
+另外原版为了绕开 Node 的 URL 解析把百分号编码按 latin1 处理的问题，做了一次
+`latin1 → UTF-8` 的补救；Go 的 URL 解析本身就按字节处理，这段补丁不再需要。
 
 ## 接口
 

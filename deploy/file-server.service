@@ -12,7 +12,7 @@ Environment=FILE_HOST=127.0.0.1
 Environment=FILE_PORT=8801
 Environment=FILE_ROOT=/opt/file-server/root
 Environment=FILE_MAX_BYTES=21474836480
-ExecStart=/opt/node/bin/node /opt/file-server/server/server.js
+ExecStart=/opt/file-server/file-server
 Restart=always
 RestartSec=3
 NoNewPrivileges=true
