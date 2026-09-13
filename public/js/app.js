@@ -1,8 +1,20 @@
 (function () {
   'use strict';
+
   var $ = function (id) { return document.getElementById(id); };
-  var state = { path: '/', admin: false, code: null };
+
+  var state = {
+    path: '/',
+    admin: false,
+    code: null,
+    entries: [],
+    cap: 20 * 1024 * 1024 * 1024,
+    used: 0,
+  };
   var toastTimer = null;
+  var modalOnClose = null;
+
+  /* ---------- 基础工具 ---------- */
 
   function toast(msg) {
     var el = $('toast');
@@ -11,9 +23,11 @@
     clearTimeout(toastTimer);
     toastTimer = setTimeout(function () { el.classList.add('hidden'); }, 3000);
   }
+
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+
   function fmtBytes(v) {
     if (!isFinite(v) || v == null) return '--';
     var units = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -22,16 +36,39 @@
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return (n >= 100 || i === 0 ? Math.round(n) : n.toFixed(1)) + ' ' + units[i];
   }
+
   function fmtTime(ms) {
     if (!ms) return '';
     var d = new Date(ms);
     var p = function (n) { return n < 10 ? '0' + n : '' + n; };
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
-  function fullRel(child) {
-    if (state.path === '/') return '/' + child;
-    return state.path + '/' + child;
+
+  function joinPath(dir, name) {
+    return dir === '/' ? '/' + name : dir + '/' + name;
   }
+
+  function parentPath(p) {
+    if (!p || p === '/') return '/';
+    var i = p.lastIndexOf('/');
+    return i <= 0 ? '/' : p.slice(0, i);
+  }
+
+  function baseName(p) {
+    var parts = String(p || '').split('/').filter(Boolean);
+    return parts.length ? parts[parts.length - 1] : '';
+  }
+
+  function pathFromUrl() {
+    try {
+      var raw = new URLSearchParams(location.search).get('path');
+      if (!raw) return '/';
+      return raw.charAt(0) === '/' ? raw : '/' + raw;
+    } catch (e) {
+      return '/';
+    }
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
@@ -43,173 +80,697 @@
     return data;
   }
 
-  function updateAdminUI() {
-    $('admin-panel').classList.remove('hidden');
-    $('code-form').classList.toggle('hidden', state.admin);
-    $('admin-tools').classList.toggle('hidden', !state.admin);
-    $('admin-toggle').textContent = state.admin ? '管理模式（已启用）' : '管理模式';
-    $('admin-toggle').classList.toggle('primary', state.admin);
+  function postJson(url, body) {
+    return api(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
-  $('admin-toggle').addEventListener('click', function () {
-    if (state.admin) {
-      state.admin = false;
-      state.code = null;
-      $('admin-code').value = '';
-      updateAdminUI();
-      toast('已锁定');
-      return;
-    }
-    $('admin-panel').classList.remove('hidden');
-    $('admin-code').focus();
+
+  /* ---------- 弹窗 ---------- */
+
+  function openModal(opts) {
+    var root = $('modal');
+    root.className = 'modal' + (opts.variant ? ' ' + opts.variant : '');
+
+    var title = $('modal-title');
+    title.textContent = opts.title || '';
+    title.classList.toggle('hidden', !opts.title);
+
+    var body = $('modal-body');
+    body.innerHTML = '';
+    if (opts.body) body.appendChild(opts.body);
+
+    var foot = $('modal-foot');
+    foot.innerHTML = '';
+    var buttons = (opts.actions || []).map(function (action) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'btn' + (action.kind ? ' ' + action.kind : '');
+      btn.textContent = action.label;
+      btn.addEventListener('click', function () { if (action.onClick) action.onClick(); });
+      foot.appendChild(btn);
+      return btn;
+    });
+    foot.classList.toggle('hidden', !buttons.length);
+
+    modalOnClose = opts.onClose || null;
+    root.classList.remove('hidden');
+    document.body.classList.add('modal-open');
+    if (opts.onMount) opts.onMount(buttons);
+    return buttons;
+  }
+
+  function closeModal() {
+    var root = $('modal');
+    if (root.classList.contains('hidden')) return;
+    root.classList.add('hidden');
+    document.body.classList.remove('modal-open');
+    $('modal-body').innerHTML = '';
+    $('modal-foot').innerHTML = '';
+    var cb = modalOnClose;
+    modalOnClose = null;
+    if (cb) cb();
+  }
+
+  function openSheet(title, options) {
+    var list = document.createElement('div');
+    list.className = 'sheet-list';
+    options.forEach(function (opt) {
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'sheet-item' + (opt.danger ? ' danger' : '');
+      btn.textContent = opt.label;
+      btn.addEventListener('click', function () {
+        closeModal();
+        opt.onClick();
+      });
+      list.appendChild(btn);
+    });
+    openModal({
+      title: title,
+      body: list,
+      variant: 'sheet',
+      actions: [{ label: '取消', kind: 'ghost', onClick: closeModal }],
+    });
+  }
+
+  // 用自研弹窗取代 window.prompt：
+  // 移动端内置浏览器（飞书 / 微信等）会屏蔽原生 prompt，点了没反应也就改不了名
+  function promptInput(opts) {
+    return new Promise(function (resolve) {
+      var input = document.createElement('input');
+      input.className = 'input';
+      input.type = opts.type || 'text';
+      input.value = opts.value || '';
+      if (opts.placeholder) input.placeholder = opts.placeholder;
+      input.autocomplete = 'off';
+      input.spellcheck = false;
+      if (opts.maxlength) input.maxLength = opts.maxlength;
+
+      var field = document.createElement('div');
+      field.className = 'field';
+      if (opts.label) {
+        var label = document.createElement('label');
+        label.className = 'field-label';
+        label.textContent = opts.label;
+        field.appendChild(label);
+      }
+      field.appendChild(input);
+      if (opts.hint) {
+        var hint = document.createElement('div');
+        hint.className = 'field-hint';
+        hint.textContent = opts.hint;
+        field.appendChild(hint);
+      }
+
+      var settled = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(value);
+      }
+
+      openModal({
+        title: opts.title,
+        body: field,
+        actions: [
+          { label: '取消', kind: 'ghost', onClick: function () { finish(null); } },
+          { label: opts.confirmLabel || '确定', kind: 'primary', onClick: function () { finish(input.value.trim()); } },
+        ],
+        onClose: function () { finish(null); },
+        onMount: function () {
+          try { input.focus(); } catch (e) {}
+          var dot = input.value.lastIndexOf('.');
+          // 默认选中主文件名（不含扩展名），手机上直接输入就能覆盖
+          if (opts.type !== 'password' && dot > 0) {
+            try { input.setSelectionRange(0, dot); return; } catch (e) {}
+          }
+          try { input.select(); } catch (e) {}
+        },
+      });
+
+      input.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Enter') {
+          ev.preventDefault();
+          finish(input.value.trim());
+        }
+      });
+    });
+  }
+
+  function confirmDialog(opts) {
+    return new Promise(function (resolve) {
+      var settled = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(value);
+      }
+      var text = document.createElement('p');
+      text.className = 'modal-text';
+      text.textContent = opts.message;
+      openModal({
+        title: opts.title,
+        body: text,
+        actions: [
+          { label: '取消', kind: 'ghost', onClick: function () { finish(false); } },
+          { label: opts.confirmLabel || '确定', kind: opts.danger ? 'danger solid' : 'primary', onClick: function () { finish(true); } },
+        ],
+        onClose: function () { finish(false); },
+      });
+    });
+  }
+
+  // 目录选择器：目标位置只用点选，比手打路径省事也不容易打错
+  function pickDirectory(opts) {
+    return new Promise(function (resolve) {
+      var current = opts.start || '/';
+      var settled = false;
+      function finish(value) {
+        if (settled) return;
+        settled = true;
+        closeModal();
+        resolve(value);
+      }
+
+      var crumbsEl = document.createElement('div');
+      crumbsEl.className = 'picker-crumbs';
+      var listEl = document.createElement('div');
+      listEl.className = 'picker-list';
+      var box = document.createElement('div');
+      box.className = 'picker';
+      box.appendChild(crumbsEl);
+      box.appendChild(listEl);
+
+      var buttons = openModal({
+        title: opts.title,
+        body: box,
+        actions: [
+          { label: '取消', kind: 'ghost', onClick: function () { finish(null); } },
+          { label: opts.confirmLabel || '确定', kind: 'primary', onClick: function () { finish(current); } },
+        ],
+        onClose: function () { finish(null); },
+      });
+      var confirmBtn = buttons[buttons.length - 1];
+      confirmBtn.disabled = true;
+
+      function blocked(dir) {
+        // 移到原目录是空操作；移到自身内部服务端会报错，这里直接禁用
+        if (opts.excludeDir && dir === opts.excludeDir) return true;
+        if (opts.excludeTree && (dir === opts.excludeTree || dir.indexOf(opts.excludeTree + '/') === 0)) return true;
+        return false;
+      }
+
+      function renderCrumbs() {
+        crumbsEl.innerHTML = '';
+        var rootBtn = document.createElement('button');
+        rootBtn.type = 'button';
+        rootBtn.className = 'crumb';
+        rootBtn.textContent = '根目录';
+        rootBtn.addEventListener('click', function () { load('/'); });
+        crumbsEl.appendChild(rootBtn);
+
+        var acc = '';
+        current.split('/').filter(Boolean).forEach(function (seg) {
+          acc += '/' + seg;
+          var target = acc;
+          var sep = document.createElement('span');
+          sep.className = 'crumb-sep';
+          sep.textContent = '›';
+          crumbsEl.appendChild(sep);
+
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'crumb' + (target === current ? ' current' : '');
+          btn.textContent = seg;
+          if (target !== current) btn.addEventListener('click', function () { load(target); });
+          crumbsEl.appendChild(btn);
+        });
+        crumbsEl.scrollLeft = crumbsEl.scrollWidth;
+      }
+
+      function load(dir) {
+        current = dir;
+        renderCrumbs();
+        listEl.innerHTML = '<div class="empty small">加载中…</div>';
+        return api('/api/list?path=' + encodeURIComponent(dir)).then(function (data) {
+          var dirs = (data.entries || []).filter(function (entry) { return entry.type === 'dir'; });
+          listEl.innerHTML = '';
+          if (!dirs.length) listEl.innerHTML = '<div class="empty small">没有子文件夹</div>';
+          dirs.forEach(function (entry) {
+            var btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'picker-item';
+            var icon = document.createElement('span');
+            icon.className = 'picker-item-icon';
+            icon.textContent = '📁';
+            var name = document.createElement('span');
+            name.textContent = entry.name;
+            btn.appendChild(icon);
+            btn.appendChild(name);
+            btn.addEventListener('click', function () { load(joinPath(current, entry.name)); });
+            listEl.appendChild(btn);
+          });
+          confirmBtn.disabled = blocked(current);
+        }).catch(function (err) {
+          listEl.innerHTML = '<div class="empty small">加载失败：' + esc(err.message) + '</div>';
+          confirmBtn.disabled = true;
+        });
+      }
+
+      load(current);
+    });
+  }
+
+  $('modal').addEventListener('click', function (ev) {
+    if (ev.target.classList.contains('modal-mask')) closeModal();
   });
-  $('code-form').addEventListener('submit', async function (ev) {
-    ev.preventDefault();
-    var code = $('admin-code').value.trim();
-    if (!code) return;
-    try {
-      await api('/api/session', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }) });
-      state.code = code;
-      state.admin = true;
-      $('admin-code').value = '';
-      updateAdminUI();
-      toast('管理模式已启用');
-      loadList();
-    } catch (err) {
-      toast(err.message);
-    }
-  });
-  $('lock-btn').addEventListener('click', function () {
-    state.admin = false;
-    state.code = null;
-    updateAdminUI();
-    loadList();
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && !$('modal').classList.contains('hidden')) closeModal();
   });
 
+  /* ---------- 导航 ---------- */
+
+  function navigate(rel, push) {
+    state.path = rel || '/';
+    if (push) {
+      var url = state.path === '/' ? location.pathname : location.pathname + '?path=' + encodeURIComponent(state.path);
+      try { history.pushState({ path: state.path }, '', url); } catch (e) {}
+    }
+    loadList();
+  }
+
+  function renderCrumbs() {
+    var el = $('crumbs');
+    el.innerHTML = '';
+    $('back-btn').classList.toggle('hidden', state.path === '/');
+
+    var rootBtn = document.createElement('button');
+    rootBtn.type = 'button';
+    rootBtn.className = 'crumb' + (state.path === '/' ? ' current' : '');
+    rootBtn.textContent = '根目录';
+    if (state.path !== '/') rootBtn.addEventListener('click', function () { navigate('/', true); });
+    el.appendChild(rootBtn);
+
+    var acc = '';
+    state.path.split('/').filter(Boolean).forEach(function (seg) {
+      acc += '/' + seg;
+      var target = acc;
+      var sep = document.createElement('span');
+      sep.className = 'crumb-sep';
+      sep.textContent = '›';
+      el.appendChild(sep);
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'crumb' + (target === state.path ? ' current' : '');
+      btn.textContent = seg;
+      if (target !== state.path) btn.addEventListener('click', function () { navigate(target, true); });
+      el.appendChild(btn);
+    });
+    el.scrollLeft = el.scrollWidth;
+  }
+
+  /* ---------- 列表渲染 ---------- */
+
+  var EXT_ICON = {
+    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', bmp: '🖼️', svg: '🖼️', ico: '🖼️',
+    mp4: '🎬', mkv: '🎬', mov: '🎬', avi: '🎬', webm: '🎬',
+    mp3: '🎵', wav: '🎵', flac: '🎵', m4a: '🎵', ogg: '🎵',
+    pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
+    zip: '🗜️', rar: '🗜️', '7z': '🗜️', gz: '🗜️', tar: '🗜️',
+    txt: '📝', md: '📝', log: '📝',
+    js: '📜', json: '📜', css: '📜', html: '📜', py: '📜', sh: '📜',
+  };
+
+  function iconFor(name, isDir) {
+    if (isDir) return '📁';
+    var dot = String(name).lastIndexOf('.');
+    var ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+    return EXT_ICON[ext] || '📄';
+  }
+
+  function buildRow(item) {
+    var isDir = item.type === 'dir';
+    var rel = joinPath(state.path, item.name);
+
+    var row = document.createElement('div');
+    row.className = 'row';
+
+    var icon = document.createElement('div');
+    icon.className = 'row-icon';
+    icon.textContent = iconFor(item.name, isDir);
+
+    var nameWrap = document.createElement('div');
+    nameWrap.className = 'row-name';
+    var trigger;
+    if (isDir) {
+      trigger = document.createElement('button');
+      trigger.type = 'button';
+      trigger.className = 'name-btn';
+      trigger.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        navigate(rel, true);
+      });
+    } else {
+      trigger = document.createElement('a');
+      trigger.className = 'name-link';
+      trigger.href = '/api/download?path=' + encodeURIComponent(rel);
+      trigger.setAttribute('download', item.name);
+    }
+    trigger.textContent = item.name;
+    trigger.title = item.name;
+    nameWrap.appendChild(trigger);
+
+    var meta = document.createElement('div');
+    meta.className = 'row-meta';
+    var size = document.createElement('span');
+    size.className = 'row-size';
+    size.textContent = isDir ? '文件夹' : fmtBytes(item.size);
+    var time = document.createElement('span');
+    time.className = 'row-time';
+    time.textContent = fmtTime(item.mtime);
+    meta.appendChild(size);
+    meta.appendChild(time);
+
+    row.appendChild(icon);
+    row.appendChild(nameWrap);
+    row.appendChild(meta);
+
+    if (state.admin) {
+      var more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'row-more';
+      more.textContent = '⋯';
+      more.title = '更多操作';
+      more.setAttribute('aria-label', '更多操作');
+      more.addEventListener('click', function (ev) {
+        ev.stopPropagation();
+        openRowSheet(item, rel);
+      });
+      row.appendChild(more);
+    } else {
+      var placeholder = document.createElement('div');
+      placeholder.className = 'row-more-placeholder';
+      row.appendChild(placeholder);
+    }
+
+    // 整行都可点：目录进入、文件下载，移动端可点面积更大
+    row.addEventListener('click', function (ev) {
+      if (ev.target.closest('.row-more') || ev.target.closest('.name-btn') || ev.target.closest('.name-link')) return;
+      trigger.click();
+    });
+    return row;
+  }
+
+  function renderList(entries) {
+    var listEl = $('list');
+    if (!entries.length) {
+      listEl.innerHTML = state.admin
+        ? '<div class="empty">这里还没有文件<span class="empty-hint">把文件拖到这里，或点上方「上传」</span></div>'
+        : '<div class="empty">这里还没有文件</div>';
+      return;
+    }
+    listEl.innerHTML = '';
+    var frag = document.createDocumentFragment();
+    entries.forEach(function (item) { frag.appendChild(buildRow(item)); });
+    listEl.appendChild(frag);
+  }
+
+  function renderUsage(used) {
+    if (typeof used === 'number') state.used = used;
+    var cap = state.cap > 0 ? state.cap : 1;
+    var pct = Math.max(0, Math.min(100, state.used / cap * 100));
+    $('usage-fill').style.width = pct + '%';
+    $('usage-fill').classList.toggle('warn', pct >= 85);
+    $('usage-text').textContent = '已用 ' + fmtBytes(state.used) + ' / ' + fmtBytes(state.cap);
+  }
+
   async function loadList() {
-    var listEl = $('file-list');
+    renderCrumbs();
+    var listEl = $('list');
+    listEl.innerHTML = '<div class="empty">加载中…</div>';
     try {
       var data = await api('/api/list?path=' + encodeURIComponent(state.path));
-      var parts = state.path.split('/').filter(Boolean);
-      $('crumb-more').textContent = state.path === '/' ? '' : parts.join(' / ');
+      state.entries = data.entries || [];
       renderUsage(data.usage);
-      if (!data.entries.length) {
-        listEl.innerHTML = '<div class="empty">此目录为空</div>';
-        return;
-      }
-      listEl.innerHTML = '';
-      data.entries.forEach(function (it) {
-        var row = document.createElement('div');
-        row.className = 'file-row';
-        var isDir = it.type === 'dir';
-        var nameHtml;
-        if (isDir) {
-          nameHtml = '<button class="file-dir" data-open="' + esc(fullRel(it.name)) + '">' + esc(it.name) + '</button>';
-        } else {
-          nameHtml = '<a href="/api/download?path=' + encodeURIComponent(fullRel(it.name)) + '" download>' + esc(it.name) + '</a>';
-        }
-        var actions = '';
-        if (state.admin) {
-          actions = '<div class="file-actions">' +
-            '<button class="btn small" data-act="rename" data-path="' + esc(fullRel(it.name)) + '">重命名</button>' +
-            '<button class="btn small" data-act="copy" data-path="' + esc(fullRel(it.name)) + '">复制</button>' +
-            '<button class="btn small" data-act="move" data-path="' + esc(fullRel(it.name)) + '">移动</button>' +
-            '<button class="btn small danger" data-act="delete" data-path="' + esc(fullRel(it.name)) + '">删除</button>' +
-            '</div>';
-        }
-        row.innerHTML =
-          '<span class="file-icon">' + (isDir ? '📂' : '📄') + '</span>' +
-          '<span class="file-name">' + nameHtml + '</span>' +
-          '<span class="file-size">' + (isDir ? '—' : fmtBytes(it.size)) + '</span>' +
-          '<span class="file-time">' + fmtTime(it.mtime) + '</span>' +
-          actions;
-        listEl.appendChild(row);
-      });
+      renderList(state.entries);
     } catch (err) {
       listEl.innerHTML = '<div class="empty">加载失败：' + esc(err.message) + '</div>';
     }
   }
 
-  function renderUsage(used) {
-    var cap = 20 * 1024 * 1024 * 1024;
-    var pct = Math.min(100, Math.round(used / cap * 100));
-    $('usage-text').textContent = '使用 ' + fmtBytes(used) + ' / 20 GB';
-    $('usage-pct').textContent = pct + '%';
-    $('usage-fill').style.width = pct + '%';
+  /* ---------- 行内操作 ---------- */
+
+  function openRowSheet(item, rel) {
+    var isDir = item.type === 'dir';
+    var options = [
+      { label: '重命名', onClick: function () { doRename(rel); } },
+      { label: '移动到…', onClick: function () { doMoveCopy('move', rel, isDir); } },
+      { label: '复制到…', onClick: function () { doMoveCopy('copy', rel, isDir); } },
+    ];
+    if (!isDir) {
+      options.push({
+        label: '下载',
+        onClick: function () { location.href = '/api/download?path=' + encodeURIComponent(rel); },
+      });
+    }
+    options.push({ label: '删除', danger: true, onClick: function () { doDelete(rel, item.name); } });
+    openSheet(item.name, options);
   }
 
-  async function openPath(rel) {
-    state.path = rel;
-    history.replaceState(null, '', '?path=' + encodeURIComponent(rel));
-    loadList();
+  async function doRename(rel) {
+    var oldName = baseName(rel);
+    var newName = await promptInput({
+      title: '重命名',
+      label: '新名称',
+      value: oldName,
+      confirmLabel: '重命名',
+    });
+    if (newName == null || !newName || newName === oldName) return;
+    try {
+      await postJson('/api/rename', { path: rel, newName: newName });
+      toast('已重命名为 ' + newName);
+      loadList();
+    } catch (err) {
+      toast(err.message);
+    }
   }
-  $('file-list').addEventListener('click', function (ev) {
-    var btn = ev.target.closest('[data-open]');
-    if (btn) {
-      openPath(btn.getAttribute('data-open'));
-      return;
+
+  async function doMoveCopy(kind, rel, isDir) {
+    var moving = kind === 'move';
+    var label = baseName(rel);
+    var destDir = await pickDirectory({
+      title: (moving ? '移动「' : '复制「') + label + '」到',
+      confirmLabel: moving ? '移动到这里' : '复制到这里',
+      start: state.path,
+      excludeDir: parentPath(rel),
+      excludeTree: isDir ? rel : null,
+    });
+    if (destDir == null) return;
+    try {
+      await postJson('/api/' + kind, { path: rel, destDir: destDir });
+      toast(moving ? '已移动' : '已复制');
+      loadList();
+    } catch (err) {
+      toast(err.message);
     }
-    var act = ev.target.closest('[data-act]');
-    if (!act || !state.admin) return;
-    var rel = act.getAttribute('data-path');
-    var kind = act.getAttribute('data-act');
-    if (kind === 'delete') {
-      if (!confirm('确认删除 ' + rel + ' ？此操作不可恢复')) return;
-      api('/api/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel }) })
-        .then(function () { toast('已删除'); loadList(); })
-        .catch(function (e) { toast(e.message); });
-    } else if (kind === 'rename') {
-      var name = rel.split('/').pop();
-      var newName = prompt('输入新名称', name);
-      if (!newName || newName === name) return;
-      api('/api/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, newName: newName.trim() }) })
-        .then(function () { toast('已重命名'); loadList(); })
-        .catch(function (e) { toast(e.message); });
-    } else {
-      var dest = prompt('输入目标文件夹（从根目录开始，例如 /documents，留空为根目录）', '/');
-      if (dest == null) return;
-      dest = String(dest).trim() || '/';
-      api('/api/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: rel, destDir: dest }) })
-        .then(function () { toast(kind === 'copy' ? '已复制' : '已移动'); loadList(); })
-        .catch(function (e) { toast(e.message); });
+  }
+
+  async function doDelete(rel, name) {
+    var ok = await confirmDialog({
+      title: '删除',
+      message: '确定删除「' + name + '」？删除后无法恢复。',
+      confirmLabel: '删除',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await postJson('/api/delete', { path: rel });
+      toast('已删除');
+      loadList();
+    } catch (err) {
+      toast(err.message);
     }
+  }
+
+  /* ---------- 管理模式 ---------- */
+
+  function updateChrome() {
+    document.body.classList.toggle('is-admin', state.admin);
+    // JS 里同步收起，不依赖 CSS 的 :not() 选择器，加载瞬间也不会闪出管理按钮
+    $('toolbar-actions').classList.toggle('hidden', !state.admin);
+    var btn = $('admin-btn');
+    btn.classList.toggle('active', state.admin);
+    btn.querySelector('.admin-icon').textContent = state.admin ? '🔓' : '🔒';
+    btn.querySelector('.admin-label').textContent = state.admin ? '已解锁' : '管理模式';
+    btn.title = state.admin ? '点击退出管理模式' : '输入管理码解锁写操作';
+  }
+
+  async function unlock() {
+    var code = await promptInput({
+      title: '管理模式',
+      label: '管理码',
+      type: 'password',
+      placeholder: '输入管理码',
+      confirmLabel: '解锁',
+      hint: '解锁后可以上传、重命名、移动、复制和删除',
+    });
+    if (!code) return;
+    try {
+      await postJson('/api/session', { code: code });
+      state.code = code;
+      state.admin = true;
+      updateChrome();
+      toast('管理模式已启用');
+      loadList();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  $('admin-btn').addEventListener('click', function () {
+    if (!state.admin) return unlock();
+    state.admin = false;
+    state.code = null;
+    updateChrome();
+    toast('已退出管理模式');
+    loadList();
   });
 
-  $('root-btn').addEventListener('click', function () {
-    state.path = '/';
-    history.replaceState(null, '', location.pathname);
-    loadList();
-  });
-  $('refresh-btn').addEventListener('click', loadList);
-  $('mkdir-btn').addEventListener('click', function () {
-    var name = prompt('输入文件夹名称');
-    if (!name) return;
-    api('/api/mkdir', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: state.path, name: name.trim() }) })
-      .then(function () { toast('已创建'); loadList(); })
-      .catch(function (e) { toast(e.message); });
-  });
-  $('upload-btn').addEventListener('click', function () { $('file-input').click(); });
-  $('file-input').addEventListener('change', async function () {
-    var files = Array.prototype.slice.call($('file-input').files || []);
+  /* ---------- 上传 ---------- */
+
+  function showProgress(text, ratio) {
+    $('upload-box').classList.remove('hidden');
+    $('upload-text').textContent = text;
+    $('upload-fill').style.width = Math.max(0, Math.min(100, ratio * 100)) + '%';
+  }
+
+  function hideProgress() {
+    $('upload-box').classList.add('hidden');
+  }
+
+  // 用 XHR 而不是 fetch，为了拿到上传进度
+  function uploadOne(file, dir, onProgress) {
+    return new Promise(function (resolve, reject) {
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload?path=' + encodeURIComponent(dir));
+      if (state.code) xhr.setRequestHeader('X-Admin-Code', state.code);
+      xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+      xhr.upload.onprogress = function (ev) {
+        if (ev.lengthComputable) onProgress(ev.loaded / ev.total);
+      };
+      xhr.onload = function () {
+        var data = null;
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error((data && data.error) || ('HTTP ' + xhr.status)));
+      };
+      xhr.onerror = function () { reject(new Error('网络中断')); };
+      xhr.onabort = function () { reject(new Error('已取消')); };
+      xhr.send(file);
+    });
+  }
+
+  async function uploadFiles(fileList) {
+    var files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
+    var dir = state.path;
+    var total = files.length;
+    var finished = 0;
+    showProgress('准备上传…', 0);
     for (var i = 0; i < files.length; i++) {
-      var f = files[i];
+      var file = files[i];
+      var index = i;
       try {
-        await api('/api/upload?path=' + encodeURIComponent(state.path), {
-          method: 'POST',
-          headers: { 'X-File-Name': encodeURIComponent(f.name) },
-          body: f,
+        await uploadOne(file, dir, function (ratio) {
+          showProgress('上传中 ' + (index + 1) + '/' + total + ' · ' + file.name, (finished + ratio) / total);
         });
-        toast('已上传：' + f.name);
-      } catch (e) {
-        toast('上传失败 ' + f.name + '：' + e.message);
-        break;
+        finished++;
+      } catch (err) {
+        hideProgress();
+        toast('上传失败（' + file.name + '）：' + err.message);
+        loadList();
+        return;
       }
     }
+    hideProgress();
+    toast(total > 1 ? '已上传 ' + total + ' 个文件' : '已上传 ' + files[0].name);
+    loadList();
+  }
+
+  $('upload-btn').addEventListener('click', function () { $('file-input').click(); });
+  $('file-input').addEventListener('change', function () {
+    var files = $('file-input').files;
     $('file-input').value = '';
+    uploadFiles(files);
+  });
+
+  var dragDepth = 0;
+  function isFileDrag(ev) {
+    var dt = ev.dataTransfer;
+    return !!dt && Array.prototype.indexOf.call(dt.types || [], 'Files') >= 0;
+  }
+  document.addEventListener('dragover', function (ev) {
+    if (!state.admin || !isFileDrag(ev)) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'copy';
+  });
+  document.addEventListener('dragenter', function (ev) {
+    if (!state.admin || !isFileDrag(ev)) return;
+    ev.preventDefault();
+    dragDepth++;
+    $('drop-hint').classList.remove('hidden');
+  });
+  document.addEventListener('dragleave', function (ev) {
+    if (!state.admin || !isFileDrag(ev)) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (!dragDepth) $('drop-hint').classList.add('hidden');
+  });
+  document.addEventListener('drop', function (ev) {
+    if (!state.admin || !isFileDrag(ev)) return;
+    ev.preventDefault();
+    dragDepth = 0;
+    $('drop-hint').classList.add('hidden');
+    uploadFiles(ev.dataTransfer.files);
+  });
+
+  /* ---------- 其余控件 ---------- */
+
+  $('mkdir-btn').addEventListener('click', async function () {
+    var name = await promptInput({
+      title: '新建文件夹',
+      label: '文件夹名称',
+      placeholder: '例如 图片',
+      confirmLabel: '创建',
+    });
+    if (!name) return;
+    try {
+      await postJson('/api/mkdir', { path: state.path, name: name });
+      toast('已创建 ' + name);
+      loadList();
+    } catch (err) {
+      toast(err.message);
+    }
+  });
+
+  $('back-btn').addEventListener('click', function () { navigate(parentPath(state.path), true); });
+  $('refresh-btn').addEventListener('click', loadList);
+  $('brand').addEventListener('click', function () { if (state.path !== '/') navigate('/', true); });
+
+  window.addEventListener('popstate', function (ev) {
+    state.path = (ev.state && ev.state.path) || pathFromUrl();
     loadList();
   });
 
-  updateAdminUI();
+  /* ---------- 启动 ---------- */
+
+  state.path = pathFromUrl();
+  try { history.replaceState({ path: state.path }, '', location.href); } catch (e) {}
+  updateChrome();
   loadList();
-  api('/api/usage').then(function (d) { renderUsage(d.used); }).catch(function () {});
+  api('/api/usage').then(function (data) {
+    if (data && typeof data.cap === 'number' && data.cap > 0) state.cap = data.cap;
+    if (data) renderUsage(typeof data.used === 'number' ? data.used : undefined);
+  }).catch(function () {});
 })();

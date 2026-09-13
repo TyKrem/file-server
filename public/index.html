@@ -1,56 +1,72 @@
 <!doctype html>
-<html lang="zh-CN" data-theme="light">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="referrer" content="strict-origin-when-cross-origin">
+  <meta name="theme-color" content="#0b7fc4">
   <title>文件服务 · file.tykrem.top</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230b7fc4' d='M3 6h6l2 2h10v12H3z'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/css/style.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">
+  <header class="appbar">
+    <button id="brand" class="brand" type="button">
       <span class="brand-icon">📁</span>
       <span class="brand-name">文件服务</span>
-    </div>
-    <div class="top-actions">
-      <button id="admin-toggle" class="btn ghost" type="button">管理模式</button>
+    </button>
+    <div class="appbar-actions">
+      <button id="refresh-btn" class="icon-btn" type="button" title="刷新列表" aria-label="刷新列表">⟳</button>
+      <button id="admin-btn" class="btn admin-btn" type="button">
+        <span class="admin-icon">🔒</span>
+        <span class="admin-label">管理模式</span>
+      </button>
     </div>
   </header>
 
-  <div id="admin-panel" class="admin-panel hidden">
-    <form id="code-form" class="code-form" autocomplete="off">
-      <input id="admin-code" type="password" placeholder="输入超级码" maxlength="128">
-      <button class="btn primary" type="submit">解锁</button>
-    </form>
-    <div id="admin-tools" class="admin-tools hidden">
-      <button id="upload-btn" class="btn primary" type="button">上传文件</button>
-      <button id="mkdir-btn" class="btn" type="button">新建文件夹</button>
-      <button id="lock-btn" class="btn ghost" type="button">锁定</button>
-      <span class="admin-tip">游客只能查看和下载；管理模式可上传 / 删除 / 重命名 / 移动 / 复制</span>
-    </div>
-  </div>
-  <input id="file-input" type="file" multiple hidden>
+  <div class="wrap">
+    <nav class="toolbar">
+      <button id="back-btn" class="icon-btn hidden" type="button" title="返回上级" aria-label="返回上级">‹</button>
+      <div class="crumbs" id="crumbs"></div>
+      <div id="toolbar-actions" class="toolbar-actions admin-only hidden">
+        <button id="mkdir-btn" class="btn" type="button">
+          <span class="btn-long">新建文件夹</span><span class="btn-short">新建</span>
+        </button>
+        <button id="upload-btn" class="btn primary" type="button">上传</button>
+      </div>
+    </nav>
 
-  <main class="container">
-    <div class="usage-bar">
-      <div class="usage-head"><span id="usage-text">使用 0 B / 20 GB</span><span id="usage-pct">0%</span></div>
+    <div class="usage">
       <div class="usage-track"><div class="usage-fill" id="usage-fill"></div></div>
+      <span class="usage-text" id="usage-text">正在统计用量…</span>
     </div>
 
-    <div class="crumb-bar">
-      <button id="root-btn" class="crumb" type="button">根目录</button>
-      <span id="crumb-more" class="crumb-text"></span>
-      <button id="refresh-btn" class="btn small ghost" type="button">刷新</button>
-    </div>
-
-    <section id="file-list" class="file-list">
+    <section id="list" class="list">
       <div class="empty">加载中…</div>
     </section>
-  </main>
+  </div>
 
+  <div id="drop-hint" class="drop-hint hidden">
+    <div class="drop-hint-box">松开即可上传到当前目录</div>
+  </div>
+
+  <div id="upload-box" class="upload-box hidden">
+    <div class="upload-text" id="upload-text">上传中…</div>
+    <div class="upload-track"><div class="upload-fill" id="upload-fill"></div></div>
+  </div>
+
+  <input id="file-input" type="file" multiple hidden>
   <div id="toast" class="toast hidden"></div>
+
+  <div id="modal" class="modal hidden">
+    <div class="modal-mask" data-close></div>
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h2 id="modal-title" class="modal-title"></h2>
+      <div id="modal-body" class="modal-body"></div>
+      <div id="modal-foot" class="modal-foot"></div>
+    </div>
+  </div>
+
   <script src="/js/app.js"></script>
 </body>
 </html>
