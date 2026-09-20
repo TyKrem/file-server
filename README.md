@@ -17,7 +17,7 @@
 | --- | --- |
 | 根目录 | 只允许访问 `FILE_ROOT` 及其子目录，越界路径直接拒绝 |
 | 配额 | 默认 20GB（`FILE_MAX_BYTES`），上传/复制前校验 |
-| 超级码 | `FILE_ADMIN_CODE`，未设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
+| 超级码 | `FILE_ADMIN_CODE`，未设置时回退读 `/etc/super-code.env` 的 `SUPER_CODE` |
 | 解锁状态 | 超级码换来的签名 Cookie（HMAC，密钥就是超级码本身，改码即全部失效），12 小时 |
 
 ## 鉴权
@@ -115,7 +115,7 @@ curl -b /tmp/fs.jar 'http://127.0.0.1:8801/api/list?path=/'
 | `FILE_ROOT` | `/opt/file-server/root` | 文件根目录 |
 | `FILE_DATA_DIR` | `/opt/file-server/data` | 元数据目录 |
 | `FILE_MAX_BYTES` | `21474836480` | 配额上限（字节） |
-| `FILE_ADMIN_CODE` | — | 全站超级码；不设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
+| `FILE_ADMIN_CODE` | — | 全站超级码；不设置时回退读 `/etc/super-code.env` 的 `SUPER_CODE` |
 
 ## License
 

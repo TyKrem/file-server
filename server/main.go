@@ -76,16 +76,17 @@ func envInt(key string, def int64) int64 {
 	return n
 }
 
-// loadFallbackCode 在没配 FILE_ADMIN_CODE 时，回退读 chat-app 的超级码。
+// loadFallbackCode 在没配 FILE_ADMIN_CODE 时，回退读本机共用超级码
+// （/etc/super-code.env，2026-09-21 前叫 /etc/codex-chat.env）。
 // 保持跟 Node 版一致：读不到就当没配。
 func loadFallbackCode() string {
-	data, err := os.ReadFile("/etc/codex-chat.env")
+	data, err := os.ReadFile("/etc/super-code.env")
 	if err != nil {
 		return ""
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "CHAT_SUPER_CODE="); ok {
+		if v, ok := strings.CutPrefix(line, "SUPER_CODE="); ok {
 			return strings.TrimSpace(v)
 		}
 	}
