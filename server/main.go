@@ -40,10 +40,36 @@ var (
 	host      string
 	root      string // 已经 Abs 处理，末尾不带分隔符
 	rootReal  string // realpath，用于挡符号链接越界
+	// 私密区域：独立的一棵目录树，只有超级码能进；不在公开根目录里，
+	// 所以公开列表天然看不到它（不靠过滤，少一个出错的机会）
+	privateRoot     string
+	privateRootReal string
+	privateCode     string
 	capBytes  int64
 	dataDir   string
 	adminCode string
 )
+
+// rootPaths 把「根目录」与它的 realpath 绑在一起，公开区和私密区各一份，
+// 这样解码路径、越界校验、用量统计都能按同一套逻辑走
+type rootPaths struct {
+	dir  string
+	real string
+}
+
+var (
+	publicPaths  rootPaths
+	privatePaths rootPaths
+)
+
+// used 取该根目录当前占用的字节数（私密区没有缓存，直接算）
+func (rp rootPaths) used(force bool) int64 {
+	total := getUsage(force)
+	if rp.dir != publicPaths.dir {
+		total += dirSize(rp.dir)
+	}
+	return total
+}
 
 // ---------------------------------------------------------------------------
 // 启动
@@ -107,8 +133,25 @@ func main() {
 		adminCode = loadFallbackCode()
 	}
 
+	// 私密区域：独立目录树 + 独立的访问码（默认还是同一个超级码）
+	privateRoot = os.Getenv("FILE_PRIVATE_DIR")
+	if privateRoot == "" {
+		privateRoot = "/opt/file-server/private"
+	}
+	if abs, err := filepath.Abs(privateRoot); err == nil {
+		privateRoot = abs
+	}
+	privateRoot = filepath.Clean(privateRoot)
+	privateCode = strings.TrimSpace(os.Getenv("FILE_PRIVATE_CODE"))
+	if privateCode == "" {
+		privateCode = loadFallbackCode()
+	}
+
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		log.Printf("创建根目录失败 %s：%v", root, err)
+	}
+	if err := os.MkdirAll(privateRoot, 0o700); err != nil {
+		log.Printf("创建私密目录失败 %s：%v", privateRoot, err)
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		log.Printf("创建数据目录失败 %s：%v", dataDir, err)
@@ -120,6 +163,13 @@ func main() {
 	} else {
 		rootReal = root
 	}
+	if real, err := filepath.EvalSymlinks(privateRoot); err == nil {
+		privateRootReal = real
+	} else {
+		privateRootReal = privateRoot
+	}
+	publicPaths = rootPaths{dir: root, real: rootReal}
+	privatePaths = rootPaths{dir: privateRoot, real: privateRootReal}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", handleAPI)
@@ -135,6 +185,7 @@ func main() {
 	}
 	log.Printf("file server listening on http://%s:%d", host, port)
 	log.Printf("root=%s cap=%d admin=%v", root, capBytes, adminCode != "")
+	log.Printf("private=%s privateCode=%v", privateRoot, privateCode != "")
 	reportLog("info", "文件服务启动", map[string]any{
 		"port":            port,
 		"root":            root,
@@ -230,8 +281,13 @@ type pathInfo struct {
 // Go 的 url 解析本身就是按字节处理的，百分号编码和裸 UTF-8 都能正确还原，
 // 所以这个补丁不需要了（两种发法都实测过）。
 func decodePath(raw string) *pathInfo {
+	return decodePathIn(root, raw)
+}
+
+// decodePathIn 与 decodePath 相同，只是根目录由调用方给（公开区 / 私密区共用一套校验）
+func decodePathIn(baseDir string, raw string) *pathInfo {
 	if raw == "" {
-		return &pathInfo{rel: "/", abs: root}
+		return &pathInfo{rel: "/", abs: baseDir}
 	}
 	s := strings.ReplaceAll(raw, "\\", "/")
 	if !strings.HasPrefix(s, "/") {
@@ -241,8 +297,8 @@ func decodePath(raw string) *pathInfo {
 		return nil
 	}
 	clean := path.Clean(s)
-	abs := filepath.Join(root, clean)
-	if abs != root && !strings.HasPrefix(abs, root+string(filepath.Separator)) {
+	abs := filepath.Join(baseDir, clean)
+	if abs != baseDir && !strings.HasPrefix(abs, baseDir+string(filepath.Separator)) {
 		return nil
 	}
 	return &pathInfo{rel: clean, abs: abs}
@@ -250,11 +306,15 @@ func decodePath(raw string) *pathInfo {
 
 // ensureInside 用 realpath 判断目标是否仍在根目录内，挡掉指向外面的符号链接。
 func ensureInside(abs string) (string, error) {
+	return ensureInsideIn(rootReal, abs)
+}
+
+func ensureInsideIn(baseReal string, abs string) (string, error) {
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return "", err
 	}
-	if real != rootReal && !strings.HasPrefix(real, rootReal+string(filepath.Separator)) {
+	if real != baseReal && !strings.HasPrefix(real, baseReal+string(filepath.Separator)) {
 		return "", errStatus(http.StatusForbidden, "路径越界")
 	}
 	return real, nil
@@ -504,31 +564,18 @@ func handleAPI(w http.ResponseWriter, r *http.Request) {
 func route(w http.ResponseWriter, r *http.Request) error {
 	// Go 1.22 起 ServeMux 直接把方法带进 pattern，但这里要跟原来一样对
 	// 「路径对、方法不对」也回 404 而不是 405，所以自己分派。
-	q := r.URL.Query()
 	endpoint := r.URL.Path
 
 	switch {
 	case r.Method == http.MethodGet && endpoint == "/api/list":
-		info := decodePath(q.Get("path"))
-		if info == nil {
-			return errStatus(http.StatusBadRequest, "路径无效")
-		}
-		if _, err := ensureInside(info.abs); err != nil {
-			return err
-		}
-		entries, err := listDir(info.abs)
-		if err != nil {
-			return err
-		}
-		sendJSON(w, http.StatusOK, listResponse{Path: info.rel, Entries: entries, Usage: getUsage(false)})
-		return nil
+		return handleList(w, r, publicPaths)
 
 	case r.Method == http.MethodGet && endpoint == "/api/usage":
-		sendJSON(w, http.StatusOK, usageResponse{Used: getUsage(false), Cap: capBytes})
+		sendJSON(w, http.StatusOK, usageResponse{Used: publicPaths.used(false), Cap: capBytes})
 		return nil
 
 	case r.Method == http.MethodGet && endpoint == "/api/download":
-		return handleDownload(w, r)
+		return handleDownload(w, r, publicPaths)
 
 	case r.Method == http.MethodPost && endpoint == "/api/session":
 		body, err := readJSON(r)
@@ -543,27 +590,49 @@ func route(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
+	// ---- 私密区域：独立目录树，只认超级码换来的 Cookie ----
+	if strings.HasPrefix(endpoint, "/api/private/") {
+		return routePrivate(w, r, endpoint)
+	}
+
 	if !isAdmin(r) {
 		return errStatus(http.StatusUnauthorized, "需要超级码")
 	}
 
 	switch {
 	case r.Method == http.MethodPost && endpoint == "/api/mkdir":
-		return handleMkdir(w, r)
+		return handleMkdir(w, r, publicPaths)
 	case r.Method == http.MethodPost && endpoint == "/api/upload":
-		return handleUpload(w, r)
+		return handleUpload(w, r, publicPaths)
 	case r.Method == http.MethodPost && endpoint == "/api/delete":
-		return handleDelete(w, r)
+		return handleDelete(w, r, publicPaths)
 	case r.Method == http.MethodPost && endpoint == "/api/rename":
-		return handleRename(w, r)
+		return handleRename(w, r, publicPaths)
 	case r.Method == http.MethodPost && (endpoint == "/api/move" || endpoint == "/api/copy"):
-		return handleMoveCopy(w, r, endpoint == "/api/move")
+		return handleMoveCopy(w, r, endpoint == "/api/move", publicPaths)
 	}
 	return errStatus(http.StatusNotFound, "接口不存在")
 }
 
-func handleDownload(w http.ResponseWriter, r *http.Request) error {
-	info := decodePath(r.URL.Query().Get("path"))
+// handleList 列目录：公开区与私密区共用，只是根不同
+func handleList(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
+	info := decodePathIn(rp.dir, r.URL.Query().Get("path"))
+	if info == nil {
+		return errStatus(http.StatusBadRequest, "路径无效")
+	}
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
+		return err
+	}
+	entries, err := listDir(info.abs)
+	if err != nil {
+		return err
+	}
+	sendJSON(w, http.StatusOK, listResponse{Path: info.rel, Entries: entries, Usage: rp.used(false)})
+	return nil
+}
+
+func handleDownload(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
+	info := decodePathIn(rp.dir, r.URL.Query().Get("path"))
 	if info == nil {
 		return errStatus(http.StatusBadRequest, "路径无效")
 	}
@@ -574,7 +643,7 @@ func handleDownload(w http.ResponseWriter, r *http.Request) error {
 	if st.IsDir() {
 		return errStatus(http.StatusBadRequest, "不能下载目录")
 	}
-	if _, err := ensureInside(info.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
 		return err
 	}
 	f, err := os.Open(info.abs)
@@ -609,12 +678,12 @@ func rfc5987Encode(s string) string {
 	return b.String()
 }
 
-func handleMkdir(w http.ResponseWriter, r *http.Request) error {
+func handleMkdir(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
 	body, err := readJSON(r)
 	if err != nil {
 		return err
 	}
-	info := decodePath(str(body, "path"))
+	info := decodePathIn(rp.dir, str(body, "path"))
 	name := strings.TrimSpace(str(body, "name"))
 	if info == nil {
 		return errStatus(http.StatusBadRequest, "参数无效")
@@ -622,7 +691,7 @@ func handleMkdir(w http.ResponseWriter, r *http.Request) error {
 	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) {
 		return errStatus(http.StatusBadRequest, "文件夹名称不能包含路径分隔符，只需填写名称")
 	}
-	if _, err := ensureInside(info.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
 		return err
 	}
 	st, err := os.Stat(info.abs)
@@ -643,8 +712,8 @@ func handleMkdir(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func handleUpload(w http.ResponseWriter, r *http.Request) error {
-	info := decodePath(r.URL.Query().Get("path"))
+func handleUpload(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
+	info := decodePathIn(rp.dir, r.URL.Query().Get("path"))
 	name := strings.TrimSpace(r.Header.Get("X-File-Name"))
 	if decoded, err := url.QueryUnescape(name); err == nil {
 		name = decoded
@@ -653,7 +722,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) error {
 	if info == nil || name == "" || name == "." || name == ".." || name == "/" {
 		return errStatus(http.StatusBadRequest, "参数无效")
 	}
-	if _, err := ensureInside(info.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
 		return err
 	}
 	st, err := os.Stat(info.abs)
@@ -668,7 +737,7 @@ func handleUpload(w http.ResponseWriter, r *http.Request) error {
 		return errStatus(http.StatusConflict, "同名文件已存在")
 	}
 
-	used := getUsage(true)
+	used := rp.used(true)
 	available := capBytes - used
 	if available < 0 {
 		available = 0
@@ -718,16 +787,16 @@ func streamUpload(src io.Reader, dest string, maxBytes int64) (int64, error) {
 	return written, nil
 }
 
-func handleDelete(w http.ResponseWriter, r *http.Request) error {
+func handleDelete(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
 	body, err := readJSON(r)
 	if err != nil {
 		return err
 	}
-	info := decodePath(str(body, "path"))
-	if info == nil || info.abs == root {
+	info := decodePathIn(rp.dir, str(body, "path"))
+	if info == nil || info.abs == rp.dir {
 		return errStatus(http.StatusBadRequest, "不能删除根目录")
 	}
-	if _, err := ensureInside(info.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(info.abs); err != nil {
@@ -738,17 +807,17 @@ func handleDelete(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func handleRename(w http.ResponseWriter, r *http.Request) error {
+func handleRename(w http.ResponseWriter, r *http.Request, rp rootPaths) error {
 	body, err := readJSON(r)
 	if err != nil {
 		return err
 	}
-	info := decodePath(str(body, "path"))
+	info := decodePathIn(rp.dir, str(body, "path"))
 	newName := strings.TrimSpace(strings.NewReplacer("\\", "", "/", "").Replace(str(body, "newName")))
-	if info == nil || newName == "" || info.abs == root || newName == "." || newName == ".." {
+	if info == nil || newName == "" || info.abs == rp.dir || newName == "." || newName == ".." {
 		return errStatus(http.StatusBadRequest, "参数无效")
 	}
-	if _, err := ensureInside(info.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, info.abs); err != nil {
 		return err
 	}
 	dest := filepath.Join(filepath.Dir(info.abs), newName)
@@ -762,20 +831,20 @@ func handleRename(w http.ResponseWriter, r *http.Request) error {
 	return nil
 }
 
-func handleMoveCopy(w http.ResponseWriter, r *http.Request, isMove bool) error {
+func handleMoveCopy(w http.ResponseWriter, r *http.Request, isMove bool, rp rootPaths) error {
 	body, err := readJSON(r)
 	if err != nil {
 		return err
 	}
-	src := decodePath(str(body, "path"))
-	dstDir := decodePath(str(body, "destDir"))
-	if src == nil || dstDir == nil || src.abs == root {
+	src := decodePathIn(rp.dir, str(body, "path"))
+	dstDir := decodePathIn(rp.dir, str(body, "destDir"))
+	if src == nil || dstDir == nil || src.abs == rp.dir {
 		return errStatus(http.StatusBadRequest, "参数无效")
 	}
-	if _, err := ensureInside(src.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, src.abs); err != nil {
 		return err
 	}
-	if _, err := ensureInside(dstDir.abs); err != nil {
+	if _, err := ensureInsideIn(rp.real, dstDir.abs); err != nil {
 		return err
 	}
 	st, err := os.Stat(dstDir.abs)
@@ -799,7 +868,7 @@ func handleMoveCopy(w http.ResponseWriter, r *http.Request, isMove bool) error {
 		}
 	} else {
 		srcSize := dirSize(src.abs)
-		if getUsage(true)+srcSize > capBytes {
+		if rp.used(true)+srcSize > capBytes {
 			return errStatus(http.StatusRequestEntityTooLarge, "复制后超过 20GB 磁盘配额")
 		}
 		srcInfo, err := os.Stat(src.abs)

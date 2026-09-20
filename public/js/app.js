@@ -6,6 +6,7 @@
   var state = {
     path: '/',
     admin: false,
+    private: false,      // 是否处于私密区域（独立目录树，靠超级码换的 Cookie）
     code: null,
     entries: [],
     cap: 20 * 1024 * 1024 * 1024,
@@ -69,11 +70,22 @@
     }
   }
 
+  // 私密模式下把 /api/xxx 映射到 /api/private/xxx（下载、上传这些不走 api() 的地方也要用）
+  function apiPath(path) {
+    if (state.private && path.indexOf('/api/') === 0 && path.indexOf('/api/private/') !== 0) {
+      return '/api/private/' + path.slice('/api/'.length);
+    }
+    return path;
+  }
+
   async function api(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
-    if (state.code) opts.headers['X-Admin-Code'] = state.code;
-    var res = await fetch(path, opts);
+    // 私密模式下把 /api/xxx 换成 /api/private/xxx：同一套界面、同一套处理器，
+    // 只是根目录换成私密树（unlock / lock 这两个接口本身不重写）
+    var target = apiPath(path);
+    if (state.code && !state.private) opts.headers['X-Admin-Code'] = state.code;
+    var res = await fetch(target, opts);
     var data = null;
     try { data = await res.json(); } catch (e) {}
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
@@ -353,9 +365,12 @@
 
   function navigate(rel, push) {
     state.path = rel || '/';
-    if (push) {
+    // 私密模式下不把路径写进 URL：免得私密目录名留在地址栏与浏览器历史里
+    if (push && !state.private) {
       var url = state.path === '/' ? location.pathname : location.pathname + '?path=' + encodeURIComponent(state.path);
       try { history.pushState({ path: state.path }, '', url); } catch (e) {}
+    } else if (push) {
+      try { history.replaceState({ path: '/' }, '', location.pathname); } catch (e) {}
     }
     loadList();
   }
@@ -435,7 +450,7 @@
     } else {
       trigger = document.createElement('a');
       trigger.className = 'name-link';
-      trigger.href = '/api/download?path=' + encodeURIComponent(rel);
+      trigger.href = downloadUrl(rel);
       trigger.setAttribute('download', item.name);
     }
     trigger.textContent = item.name;
@@ -532,7 +547,7 @@
     if (!isDir) {
       options.push({
         label: '下载',
-        onClick: function () { location.href = '/api/download?path=' + encodeURIComponent(rel); },
+        onClick: function () { location.href = downloadUrl(rel); },
       });
     }
     options.push({ label: '删除', danger: true, onClick: function () { doDelete(rel, item.name); } });
@@ -597,15 +612,67 @@
   /* ---------- 管理模式 ---------- */
 
   function updateChrome() {
-    document.body.classList.toggle('is-admin', state.admin);
+    document.body.classList.toggle('is-admin', state.admin || state.private);
+    document.body.classList.toggle('is-private', state.private);
     // JS 里同步收起，不依赖 CSS 的 :not() 选择器，加载瞬间也不会闪出管理按钮
-    $('toolbar-actions').classList.toggle('hidden', !state.admin);
+    $('toolbar-actions').classList.toggle('hidden', !(state.admin || state.private));
+    $('private-banner').classList.toggle('hidden', !state.private);
     var btn = $('admin-btn');
     btn.classList.toggle('active', state.admin);
     btn.querySelector('.admin-icon').textContent = state.admin ? '🔓' : '🔒';
     btn.querySelector('.admin-label').textContent = state.admin ? '已解锁' : '管理模式';
     btn.title = state.admin ? '点击退出管理模式' : '输入管理码解锁写操作';
+    var pbtn = $('private-btn');
+    pbtn.classList.toggle('active', state.private);
+    pbtn.querySelector('.private-icon').textContent = state.private ? '🔓' : '🔒';
+    pbtn.querySelector('.private-label').textContent = state.private ? '私密区' : '私密区域';
+    pbtn.title = state.private ? '点击退出私密区域' : '输入超级码进入私密区域';
   }
+
+  /* ---------- 私密区域 ---------- */
+
+  // 下载由浏览器直接点链接发起，带不了 X-Admin-Code，所以私密区靠 Cookie 放行
+  function downloadUrl(rel) {
+    var base = state.private ? '/api/private/download' : '/api/download';
+    return base + '?path=' + encodeURIComponent(rel);
+  }
+
+  async function privateEnter() {
+    var code = await promptInput({
+      title: '私密区域',
+      label: '超级码',
+      type: 'password',
+      placeholder: '输入超级码',
+      confirmLabel: '进入',
+      hint: '私密区是独立目录，公开文件列表里看不到；解锁状态保持 12 小时',
+    });
+    if (!code) return;
+    try {
+      await postJson('/api/private/unlock', { code: code });
+      state.private = true;
+      state.path = '/';
+      updateChrome();
+      toast('已进入私密区域');
+      loadList();
+    } catch (err) {
+      toast(err.message);
+    }
+  }
+
+  async function privateExit() {
+    try { await postJson('/api/private/lock'); } catch (e) {}
+    state.private = false;
+    state.path = '/';
+    updateChrome();
+    toast('已退出私密区域');
+    loadList();
+  }
+
+  $('private-btn').addEventListener('click', function () {
+    if (!state.private) return privateEnter();
+    privateExit();
+  });
+  $('private-exit').addEventListener('click', privateExit);
 
   async function unlock() {
     var code = await promptInput({
@@ -654,8 +721,9 @@
   function uploadOne(file, dir, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload?path=' + encodeURIComponent(dir));
-      if (state.code) xhr.setRequestHeader('X-Admin-Code', state.code);
+      // 私密模式下走 /api/private/upload（凭 Cookie 放行），公开区才带管理码头
+      xhr.open('POST', apiPath('/api/upload') + '?path=' + encodeURIComponent(dir));
+      if (state.code && !state.private) xhr.setRequestHeader('X-Admin-Code', state.code);
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
       xhr.upload.onprogress = function (ev) {
         if (ev.lengthComputable) onProgress(ev.loaded / ev.total);

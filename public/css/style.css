@@ -44,6 +44,16 @@ body {
 body.modal-open { overflow: hidden; }
 .hidden { display: none !important; }
 
+/* 私密区域：同一个文件浏览器切到私密树，用顶部横幅明确当前在哪 */
+.private-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 10px auto 0; max-width: var(--wrap, 1000px);
+  padding: 10px 14px; border-radius: 10px;
+  background: rgba(207, 34, 46, .08); border: 1px solid rgba(207, 34, 46, .35);
+  color: #a40e26; font-size: 13px;
+}
+.private-banner .btn { flex: 0 0 auto; }
+
 button { font: inherit; color: inherit; cursor: pointer; }
 input { font: inherit; }
 
