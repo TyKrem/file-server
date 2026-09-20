@@ -135,6 +135,12 @@ func main() {
 	}
 	log.Printf("file server listening on http://%s:%d", host, port)
 	log.Printf("root=%s cap=%d admin=%v", root, capBytes, adminCode != "")
+	reportLog("info", "文件服务启动", map[string]any{
+		"port":            port,
+		"root":            root,
+		"quotaBytes":      capBytes,
+		"adminConfigured": adminCode != "",
+	})
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("服务退出：%v", err)
 	}
@@ -480,6 +486,7 @@ func sendError(w http.ResponseWriter, err error) {
 	}
 	if status >= 500 {
 		log.Printf("请求处理失败：%s（%v）", message, err)
+		reportLog("error", "请求处理失败", map[string]any{"status": status, "error": message})
 	}
 	sendJSON(w, status, map[string]any{"error": message})
 }
