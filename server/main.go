@@ -36,39 +36,28 @@ const (
 )
 
 var (
-	port      int
-	host      string
-	root      string // 已经 Abs 处理，末尾不带分隔符
-	rootReal  string // realpath，用于挡符号链接越界
-	// 私密区域：独立的一棵目录树，只有超级码能进；不在公开根目录里，
-	// 所以公开列表天然看不到它（不靠过滤，少一个出错的机会）
-	privateRoot     string
-	privateRootReal string
-	privateCode     string
-	capBytes  int64
-	dataDir   string
+	port     int
+	host     string
+	root     string // 已经 Abs 处理，末尾不带分隔符
+	rootReal string // realpath，用于挡符号链接越界
+	capBytes int64
+	dataDir  string
+	// 全站访问码（超级码）：所有接口都要先解锁才可用
 	adminCode string
 )
 
-// rootPaths 把「根目录」与它的 realpath 绑在一起，公开区和私密区各一份，
-// 这样解码路径、越界校验、用量统计都能按同一套逻辑走
+// rootPaths 把「根目录」与它的 realpath 绑在一起，
+// 解码路径、越界校验、用量统计都按同一套逻辑走
 type rootPaths struct {
 	dir  string
 	real string
 }
 
-var (
-	publicPaths  rootPaths
-	privatePaths rootPaths
-)
+var filePaths rootPaths
 
-// used 取该根目录当前占用的字节数（私密区没有缓存，直接算）
+// used 取根目录当前占用的字节数
 func (rp rootPaths) used(force bool) int64 {
-	total := getUsage(force)
-	if rp.dir != publicPaths.dir {
-		total += dirSize(rp.dir)
-	}
-	return total
+	return getUsage(force)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,25 +122,8 @@ func main() {
 		adminCode = loadFallbackCode()
 	}
 
-	// 私密区域：独立目录树 + 独立的访问码（默认还是同一个超级码）
-	privateRoot = os.Getenv("FILE_PRIVATE_DIR")
-	if privateRoot == "" {
-		privateRoot = "/opt/file-server/private"
-	}
-	if abs, err := filepath.Abs(privateRoot); err == nil {
-		privateRoot = abs
-	}
-	privateRoot = filepath.Clean(privateRoot)
-	privateCode = strings.TrimSpace(os.Getenv("FILE_PRIVATE_CODE"))
-	if privateCode == "" {
-		privateCode = loadFallbackCode()
-	}
-
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		log.Printf("创建根目录失败 %s：%v", root, err)
-	}
-	if err := os.MkdirAll(privateRoot, 0o700); err != nil {
-		log.Printf("创建私密目录失败 %s：%v", privateRoot, err)
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
 		log.Printf("创建数据目录失败 %s：%v", dataDir, err)
@@ -163,13 +135,7 @@ func main() {
 	} else {
 		rootReal = root
 	}
-	if real, err := filepath.EvalSymlinks(privateRoot); err == nil {
-		privateRootReal = real
-	} else {
-		privateRootReal = privateRoot
-	}
-	publicPaths = rootPaths{dir: root, real: rootReal}
-	privatePaths = rootPaths{dir: privateRoot, real: privateRootReal}
+	filePaths = rootPaths{dir: root, real: rootReal}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/", handleAPI)
@@ -184,13 +150,12 @@ func main() {
 		// 上传大文件可能跑很久，写超时不能设；读超时同理交给客户端的流控。
 	}
 	log.Printf("file server listening on http://%s:%d", host, port)
-	log.Printf("root=%s cap=%d admin=%v", root, capBytes, adminCode != "")
-	log.Printf("private=%s privateCode=%v", privateRoot, privateCode != "")
+	log.Printf("root=%s cap=%d codeConfigured=%v", root, capBytes, adminCode != "")
 	reportLog("info", "文件服务启动", map[string]any{
-		"port":            port,
-		"root":            root,
-		"quotaBytes":      capBytes,
-		"adminConfigured": adminCode != "",
+		"port":           port,
+		"root":           root,
+		"quotaBytes":     capBytes,
+		"codeConfigured": adminCode != "",
 	})
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("服务退出：%v", err)
@@ -229,14 +194,6 @@ func safeEqual(a, b string) bool {
 	ha := sha256.Sum256([]byte(a))
 	hb := sha256.Sum256([]byte(b))
 	return subtle.ConstantTimeCompare(ha[:], hb[:]) == 1
-}
-
-func isAdmin(r *http.Request) bool {
-	if adminCode == "" {
-		return false
-	}
-	got := strings.TrimSpace(r.Header.Get("X-Admin-Code"))
-	return got != "" && safeEqual(got, adminCode)
 }
 
 func readJSON(r *http.Request) (map[string]any, error) {
@@ -567,49 +524,60 @@ func route(w http.ResponseWriter, r *http.Request) error {
 	endpoint := r.URL.Path
 
 	switch {
-	case r.Method == http.MethodGet && endpoint == "/api/list":
-		return handleList(w, r, publicPaths)
-
-	case r.Method == http.MethodGet && endpoint == "/api/usage":
-		sendJSON(w, http.StatusOK, usageResponse{Used: publicPaths.used(false), Cap: capBytes})
+	case r.Method == http.MethodGet && endpoint == "/api/session":
+		sendJSON(w, http.StatusOK, map[string]any{
+			"configured": adminCode != "",
+			"unlocked":   isUnlocked(r),
+		})
 		return nil
 
-	case r.Method == http.MethodGet && endpoint == "/api/download":
-		return handleDownload(w, r, publicPaths)
-
-	case r.Method == http.MethodPost && endpoint == "/api/session":
+	case r.Method == http.MethodPost && endpoint == "/api/unlock":
 		body, err := readJSON(r)
 		if err != nil {
 			return err
 		}
+		if adminCode == "" {
+			return errStatus(http.StatusServiceUnavailable, "服务端没有配置访问码")
+		}
 		code := str(body, "code")
-		if adminCode == "" || code == "" || !safeEqual(code, adminCode) {
+		if code == "" || !safeEqual(code, adminCode) {
 			return errStatus(http.StatusUnauthorized, "超级码不正确")
 		}
+		setSessionCookie(w)
+		sendJSON(w, http.StatusOK, map[string]any{"ok": true})
+		return nil
+
+	case r.Method == http.MethodPost && endpoint == "/api/lock":
+		clearSessionCookie(w)
 		sendJSON(w, http.StatusOK, map[string]any{"ok": true})
 		return nil
 	}
 
-	// ---- 私密区域：独立目录树，只认超级码换来的 Cookie ----
-	if strings.HasPrefix(endpoint, "/api/private/") {
-		return routePrivate(w, r, endpoint)
-	}
-
-	if !isAdmin(r) {
+	// 除了上面三个接口，整站都要先解锁：浏览、下载、上传、改名、删除一视同仁
+	if !isUnlocked(r) {
 		return errStatus(http.StatusUnauthorized, "需要超级码")
 	}
 
 	switch {
+	case r.Method == http.MethodGet && endpoint == "/api/list":
+		return handleList(w, r, filePaths)
+
+	case r.Method == http.MethodGet && endpoint == "/api/usage":
+		sendJSON(w, http.StatusOK, usageResponse{Used: filePaths.used(false), Cap: capBytes})
+		return nil
+
+	case r.Method == http.MethodGet && endpoint == "/api/download":
+		return handleDownload(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/mkdir":
-		return handleMkdir(w, r, publicPaths)
+		return handleMkdir(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/upload":
-		return handleUpload(w, r, publicPaths)
+		return handleUpload(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/delete":
-		return handleDelete(w, r, publicPaths)
+		return handleDelete(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/rename":
-		return handleRename(w, r, publicPaths)
+		return handleRename(w, r, filePaths)
 	case r.Method == http.MethodPost && (endpoint == "/api/move" || endpoint == "/api/copy"):
-		return handleMoveCopy(w, r, endpoint == "/api/move", publicPaths)
+		return handleMoveCopy(w, r, endpoint == "/api/move", filePaths)
 	}
 	return errStatus(http.StatusNotFound, "接口不存在")
 }

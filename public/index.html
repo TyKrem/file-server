@@ -7,7 +7,7 @@
   <meta name="theme-color" content="#0b7fc4">
   <title>文件服务 · file.tykrem.top</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230b7fc4' d='M3 6h6l2 2h10v12H3z'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/css/style.css?v=20260920">
+  <link rel="stylesheet" href="/css/style.css?v=20260921">
 </head>
 <body>
   <header class="appbar">
@@ -17,23 +17,25 @@
     </button>
     <div class="appbar-actions">
       <button id="refresh-btn" class="icon-btn" type="button" title="刷新列表" aria-label="刷新列表">⟳</button>
-      <button id="admin-btn" class="btn admin-btn" type="button">
-        <span class="admin-icon">🔒</span>
-        <span class="admin-label">管理模式</span>
-      </button>
-      <button id="private-btn" class="btn admin-btn" type="button">
-        <span class="private-icon">🔒</span>
-        <span class="private-label">私密区域</span>
+      <button id="lock-btn" class="btn admin-btn hidden" type="button" title="退出并清除本机解锁状态">
+        <span class="admin-icon">🔓</span>
+        <span class="admin-label">锁定</span>
       </button>
     </div>
   </header>
 
-  <div id="private-banner" class="private-banner hidden">
-    <span>🔒 私密区域 · 只有超级码能看到的独立目录，公开文件列表里不显示</span>
-    <button id="private-exit" class="btn" type="button">退出私密区</button>
-  </div>
+  <section id="gate" class="gate hidden">
+    <form id="gate-form" class="gate-card" autocomplete="off">
+      <div class="gate-icon">🔒</div>
+      <h2 class="gate-title">需要超级码</h2>
+      <p class="gate-sub">整站都按超级码控制，输入一次保持 12 小时</p>
+      <input id="gate-input" class="gate-input" type="password" placeholder="输入超级码" aria-label="超级码">
+      <div id="gate-hint" class="gate-hint hidden"></div>
+      <button id="gate-submit" class="btn primary gate-submit" type="submit">解锁</button>
+    </form>
+  </section>
 
-  <div class="wrap">
+  <div class="wrap" id="wrap">
     <nav class="toolbar">
       <button id="back-btn" class="icon-btn hidden" type="button" title="返回上级" aria-label="返回上级">‹</button>
       <div class="crumbs" id="crumbs"></div>
@@ -76,6 +78,6 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20260920"></script>
+  <script src="/js/app.js?v=20260921"></script>
 </body>
 </html>

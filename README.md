@@ -1,13 +1,12 @@
 # file-server
 
-一个简单的文件站点：游客只读（浏览 / 下载），输入管理码后可上传、删除、
-重命名、移动、复制。适合把自己想公开分享的文件放到服务器上。
+一个简单的文件站点：**整个站点都要超级码**。输入一次超级码后可以浏览、下载、
+上传、删除、重命名、移动、复制，解锁状态保持 12 小时，中途不用反复输码。
 
 ## 特性
 
-- 只读浏览与下载，无需登录
-- 管理码解锁写操作（上传 / 删除 / 重命名 / 移动 / 复制 / 新建目录）
-- **私密区域**：独立的一棵目录树，只有超级码能进，公开文件列表里看不到
+- 全站超级码：没有码连文件列表都看不到，浏览与写操作一视同仁
+- 解锁一次管 12 小时：状态放在签名 Cookie 里，浏览器点下载链接也带得动
 - 路径限制在根目录内，`..`、绝对路径等越界访问一律拒绝
 - 配额上限，上传与复制前检查
 - **单二进制 Go 服务**，编译出来直接跑，目标机器不需要装运行时
@@ -18,29 +17,21 @@
 | --- | --- |
 | 根目录 | 只允许访问 `FILE_ROOT` 及其子目录，越界路径直接拒绝 |
 | 配额 | 默认 20GB（`FILE_MAX_BYTES`），上传/复制前校验 |
-| 管理码 | `FILE_ADMIN_CODE`，未设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
+| 超级码 | `FILE_ADMIN_CODE`，未设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
+| 解锁状态 | 超级码换来的签名 Cookie（HMAC，密钥就是超级码本身，改码即全部失效），12 小时 |
 
-## 私密区域
+## 鉴权
 
-除公开根目录外，还可以有一棵**独立的私密目录树**（默认 `/opt/file-server/private`，
-启动时以 0700 创建）：
+整站一个码：只有 `/api/session`（查状态）、`/api/unlock`（解锁）、`/api/lock`（主动锁定）
+是免鉴权的，其余接口未解锁一律 401。
 
-- 入口在顶栏「🔒 私密区域」，输**超级码**解锁；解锁状态放在 12 小时有效的签名 Cookie 里
-- 公开列表**天然看不到**它——两棵树不在同一目录下，不是靠过滤文件名挡的
-- 进去以后是同一套文件浏览器：列目录、下载、上传、新建文件夹、重命名、移动、复制、删除
-- 下载走 Cookie 放行（浏览器点链接带不了自定义请求头），其余接口也复用同一批处理器
-- 私密区的用量计入同一个磁盘配额（`FILE_MAX_BYTES`）
+- 解锁：`POST /api/unlock`，body `{"code":"超级码"}`，成功后下发 12 小时有效的 Cookie
+- 之后浏览器怎么操作都不用再带码：下载是直接点链接，靠同一个 Cookie 放行
+- 主动锁定：`POST /api/lock`，会清掉 Cookie，页面回到解锁页
+- 换超级码 = 让所有已下发的 Cookie 立即失效（签名密钥就是码）
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `FILE_PRIVATE_DIR` | `/opt/file-server/private` | 私密目录树的根 |
-| `FILE_PRIVATE_CODE` | 见上 | 私密区访问码；不设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
-
-接口都在 `/api/private/` 下：`unlock` / `lock` / `session` / `list` / `download` / `usage` /
-`mkdir` / `upload` / `delete` / `rename` / `move` / `copy`（未解锁一律 401）。
-
-> 这个服务**没有**登录态与权限体系，"管理码"就是一个共享口令。
-> 只用来放你愿意公开的文件，不要指向含隐私的目录。
+> 这个服务**没有**多用户与权限体系，"超级码"就是一个共享口令：拿到码的人能读写全站。
+> 文件内容本身存在 `FILE_ROOT`，只由 nginx 反代 `/api/`，静态目录不直接暴露文件树。
 
 ## 快速开始
 
@@ -94,18 +85,26 @@ nginx 负责托管 `public/` 下的静态页，只有 `/api/` 反代给这个服
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
+| `GET` | `/api/session` | 查会话状态：`{configured, unlocked}`（免鉴权）|
+| `POST` | `/api/unlock` | 用超级码换 Cookie（免鉴权）|
+| `POST` | `/api/lock` | 清掉 Cookie（免鉴权）|
 | `GET` | `/api/list?path=` | 列目录 |
 | `GET` | `/api/download?path=` | 下载文件 |
 | `GET` | `/api/usage` | 已用空间与配额 |
-| `GET` | `/api/session` | 当前是否为管理模式 |
-| `POST` | `/api/upload` | 上传（管理码） |
-| `POST` | `/api/delete` | 删除（管理码） |
-| `POST` | `/api/rename` | 重命名（管理码） |
-| `POST` | `/api/move` | 移动（管理码） |
-| `POST` | `/api/copy` | 复制（管理码） |
-| `POST` | `/api/mkdir` | 新建目录（管理码） |
+| `POST` | `/api/upload` | 上传 |
+| `POST` | `/api/delete` | 删除 |
+| `POST` | `/api/rename` | 重命名 |
+| `POST` | `/api/move` | 移动 |
+| `POST` | `/api/copy` | 复制 |
+| `POST` | `/api/mkdir` | 新建目录 |
 
-写操作需带请求头 `X-Admin-Code: <管理码>`。
+除前三个外，其余接口都要带解锁后的 Cookie；命令行验证：
+
+```bash
+curl -c /tmp/fs.jar -X POST -H 'Content-Type: application/json' \
+  -d '{"code":"<超级码>"}' http://127.0.0.1:8801/api/unlock
+curl -b /tmp/fs.jar 'http://127.0.0.1:8801/api/list?path=/'
+```
 
 ## 配置项
 
@@ -116,7 +115,7 @@ nginx 负责托管 `public/` 下的静态页，只有 `/api/` 反代给这个服
 | `FILE_ROOT` | `/opt/file-server/root` | 文件根目录 |
 | `FILE_DATA_DIR` | `/opt/file-server/data` | 元数据目录 |
 | `FILE_MAX_BYTES` | `21474836480` | 配额上限（字节） |
-| `FILE_ADMIN_CODE` | — | 管理码 |
+| `FILE_ADMIN_CODE` | — | 全站超级码；不设置时回退读 `/etc/codex-chat.env` 的 `CHAT_SUPER_CODE` |
 
 ## License
 

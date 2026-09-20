@@ -5,9 +5,7 @@
 
   var state = {
     path: '/',
-    admin: false,
-    private: false,      // 是否处于私密区域（独立目录树，靠超级码换的 Cookie）
-    code: null,
+    unlocked: false,     // 是否已用超级码解锁；解锁状态在服务端 Cookie 里，保持 12 小时
     entries: [],
     cap: 20 * 1024 * 1024 * 1024,
     used: 0,
@@ -70,24 +68,19 @@
     }
   }
 
-  // 私密模式下把 /api/xxx 映射到 /api/private/xxx（下载、上传这些不走 api() 的地方也要用）
-  function apiPath(path) {
-    if (state.private && path.indexOf('/api/') === 0 && path.indexOf('/api/private/') !== 0) {
-      return '/api/private/' + path.slice('/api/'.length);
-    }
-    return path;
-  }
-
   async function api(path, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
-    // 私密模式下把 /api/xxx 换成 /api/private/xxx：同一套界面、同一套处理器，
-    // 只是根目录换成私密树（unlock / lock 这两个接口本身不重写）
-    var target = apiPath(path);
-    if (state.code && !state.private) opts.headers['X-Admin-Code'] = state.code;
-    var res = await fetch(target, opts);
+    // 鉴权走 Cookie（同源 fetch 默认带上），不再每个请求塞管理码头
+    var res = await fetch(path, opts);
     var data = null;
     try { data = await res.json(); } catch (e) {}
+    // Cookie 过期或被清掉：回到解锁页，而不是留一个空列表
+    if (res.status === 401) {
+      state.unlocked = false;
+      applyLockedUi();
+      gateHint('解锁状态已过期，请重新输入超级码');
+    }
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
     return data;
   }
@@ -365,12 +358,9 @@
 
   function navigate(rel, push) {
     state.path = rel || '/';
-    // 私密模式下不把路径写进 URL：免得私密目录名留在地址栏与浏览器历史里
-    if (push && !state.private) {
+    if (push) {
       var url = state.path === '/' ? location.pathname : location.pathname + '?path=' + encodeURIComponent(state.path);
       try { history.pushState({ path: state.path }, '', url); } catch (e) {}
-    } else if (push) {
-      try { history.replaceState({ path: '/' }, '', location.pathname); } catch (e) {}
     }
     loadList();
   }
@@ -472,7 +462,7 @@
     row.appendChild(nameWrap);
     row.appendChild(meta);
 
-    if (state.admin) {
+    if (state.unlocked) {
       var more = document.createElement('button');
       more.type = 'button';
       more.className = 'row-more';
@@ -501,7 +491,7 @@
   function renderList(entries) {
     var listEl = $('list');
     if (!entries.length) {
-      listEl.innerHTML = state.admin
+      listEl.innerHTML = state.unlocked
         ? '<div class="empty">这里还没有文件<span class="empty-hint">把文件拖到这里，或点上方「上传」</span></div>'
         : '<div class="empty">这里还没有文件</div>';
       return;
@@ -609,100 +599,68 @@
     }
   }
 
-  /* ---------- 管理模式 ---------- */
+  /* ---------- 解锁与锁定 ---------- */
 
-  function updateChrome() {
-    document.body.classList.toggle('is-admin', state.admin || state.private);
-    document.body.classList.toggle('is-private', state.private);
-    // JS 里同步收起，不依赖 CSS 的 :not() 选择器，加载瞬间也不会闪出管理按钮
-    $('toolbar-actions').classList.toggle('hidden', !(state.admin || state.private));
-    $('private-banner').classList.toggle('hidden', !state.private);
-    var btn = $('admin-btn');
-    btn.classList.toggle('active', state.admin);
-    btn.querySelector('.admin-icon').textContent = state.admin ? '🔓' : '🔒';
-    btn.querySelector('.admin-label').textContent = state.admin ? '已解锁' : '管理模式';
-    btn.title = state.admin ? '点击退出管理模式' : '输入管理码解锁写操作';
-    var pbtn = $('private-btn');
-    pbtn.classList.toggle('active', state.private);
-    pbtn.querySelector('.private-icon').textContent = state.private ? '🔓' : '🔒';
-    pbtn.querySelector('.private-label').textContent = state.private ? '私密区' : '私密区域';
-    pbtn.title = state.private ? '点击退出私密区域' : '输入超级码进入私密区域';
-  }
-
-  /* ---------- 私密区域 ---------- */
-
-  // 下载由浏览器直接点链接发起，带不了 X-Admin-Code，所以私密区靠 Cookie 放行
+  // 下载是浏览器直接点链接，鉴权只能靠 Cookie（同一会话已解锁）
   function downloadUrl(rel) {
-    var base = state.private ? '/api/private/download' : '/api/download';
-    return base + '?path=' + encodeURIComponent(rel);
+    return '/api/download?path=' + encodeURIComponent(rel);
   }
 
-  async function privateEnter() {
-    var code = await promptInput({
-      title: '私密区域',
-      label: '超级码',
-      type: 'password',
-      placeholder: '输入超级码',
-      confirmLabel: '进入',
-      hint: '私密区是独立目录，公开文件列表里看不到；解锁状态保持 12 小时',
-    });
-    if (!code) return;
-    try {
-      await postJson('/api/private/unlock', { code: code });
-      state.private = true;
-      state.path = '/';
-      updateChrome();
-      toast('已进入私密区域');
-      loadList();
-    } catch (err) {
-      toast(err.message);
-    }
+  // 未解锁时只显示解锁页，文件界面整块收起来，避免闪出空列表
+  function applyLockedUi() {
+    var locked = !state.unlocked;
+    $('wrap').classList.toggle('hidden', locked);
+    $('gate').classList.toggle('hidden', !locked);
+    $('lock-btn').classList.toggle('hidden', locked);
+    $('refresh-btn').classList.toggle('hidden', locked);
+    $('toolbar-actions').classList.toggle('hidden', locked);
+    document.body.classList.toggle('is-admin', !locked);
+    document.body.classList.toggle('locked', locked);
   }
 
-  async function privateExit() {
-    try { await postJson('/api/private/lock'); } catch (e) {}
-    state.private = false;
+  function gateHint(msg) {
+    var el = $('gate-hint');
+    el.textContent = msg || '';
+    el.classList.toggle('hidden', !msg);
+  }
+
+  async function unlock(code) {
+    await postJson('/api/unlock', { code: code });
+    state.unlocked = true;
+    applyLockedUi();
+    gateHint('');
+    toast('已解锁');
+    loadList();
+  }
+
+  async function lock() {
+    try { await postJson('/api/lock'); } catch (e) {}
+    state.unlocked = false;
     state.path = '/';
-    updateChrome();
-    toast('已退出私密区域');
-    loadList();
+    state.entries = [];
+    applyLockedUi();
+    gateHint('已锁定，请重新输入超级码');
+    $('gate-input').focus();
   }
 
-  $('private-btn').addEventListener('click', function () {
-    if (!state.private) return privateEnter();
-    privateExit();
-  });
-  $('private-exit').addEventListener('click', privateExit);
+  $('lock-btn').addEventListener('click', function () { lock(); });
 
-  async function unlock() {
-    var code = await promptInput({
-      title: '管理模式',
-      label: '管理码',
-      type: 'password',
-      placeholder: '输入管理码',
-      confirmLabel: '解锁',
-      hint: '解锁后可以上传、重命名、移动、复制和删除',
-    });
+  $('gate-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    var input = $('gate-input');
+    var code = input.value.trim();
     if (!code) return;
+    var submit = $('gate-submit');
+    submit.disabled = true;
     try {
-      await postJson('/api/session', { code: code });
-      state.code = code;
-      state.admin = true;
-      updateChrome();
-      toast('管理模式已启用');
-      loadList();
+      await unlock(code);
+      input.value = '';
     } catch (err) {
-      toast(err.message);
+      gateHint(err.message);
+      input.select();
+    } finally {
+      submit.disabled = false;
     }
-  }
-
-  $('admin-btn').addEventListener('click', function () {
-    if (!state.admin) return unlock();
-    state.admin = false;
-    state.code = null;
-    updateChrome();
-    toast('已退出管理模式');
-    loadList();
   });
 
   /* ---------- 上传 ---------- */
@@ -721,9 +679,8 @@
   function uploadOne(file, dir, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
-      // 私密模式下走 /api/private/upload（凭 Cookie 放行），公开区才带管理码头
-      xhr.open('POST', apiPath('/api/upload') + '?path=' + encodeURIComponent(dir));
-      if (state.code && !state.private) xhr.setRequestHeader('X-Admin-Code', state.code);
+      // 凭 Cookie 放行，不额外带头
+      xhr.open('POST', '/api/upload?path=' + encodeURIComponent(dir));
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
       xhr.upload.onprogress = function (ev) {
         if (ev.lengthComputable) onProgress(ev.loaded / ev.total);
@@ -782,23 +739,23 @@
     return !!dt && Array.prototype.indexOf.call(dt.types || [], 'Files') >= 0;
   }
   document.addEventListener('dragover', function (ev) {
-    if (!state.admin || !isFileDrag(ev)) return;
+    if (!state.unlocked || !isFileDrag(ev)) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('dragenter', function (ev) {
-    if (!state.admin || !isFileDrag(ev)) return;
+    if (!state.unlocked || !isFileDrag(ev)) return;
     ev.preventDefault();
     dragDepth++;
     $('drop-hint').classList.remove('hidden');
   });
   document.addEventListener('dragleave', function (ev) {
-    if (!state.admin || !isFileDrag(ev)) return;
+    if (!state.unlocked || !isFileDrag(ev)) return;
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) $('drop-hint').classList.add('hidden');
   });
   document.addEventListener('drop', function (ev) {
-    if (!state.admin || !isFileDrag(ev)) return;
+    if (!state.unlocked || !isFileDrag(ev)) return;
     ev.preventDefault();
     dragDepth = 0;
     $('drop-hint').classList.add('hidden');
@@ -837,10 +794,24 @@
 
   state.path = pathFromUrl();
   try { history.replaceState({ path: state.path }, '', location.href); } catch (e) {}
-  updateChrome();
-  loadList();
-  api('/api/usage').then(function (data) {
-    if (data && typeof data.cap === 'number' && data.cap > 0) state.cap = data.cap;
-    if (data) renderUsage(typeof data.used === 'number' ? data.used : undefined);
-  }).catch(function () {});
+  applyLockedUi();
+  // 先问一次会话状态：已解锁就直接列目录，否则停在解锁页
+  api('/api/session').then(function (data) {
+    if (data && data.unlocked) {
+      state.unlocked = true;
+      applyLockedUi();
+      loadList();
+      api('/api/usage').then(function (usage) {
+        if (usage && typeof usage.cap === 'number' && usage.cap > 0) state.cap = usage.cap;
+        if (usage) renderUsage(typeof usage.used === 'number' ? usage.used : undefined);
+      }).catch(function () {});
+      return;
+    }
+    if (data && data.configured === false) {
+      gateHint('服务端没有配置访问码，先设置 FILE_ADMIN_CODE 再重启服务');
+    }
+    $('gate-input').focus();
+  }).catch(function (err) {
+    gateHint('无法连接服务：' + err.message);
+  });
 })();
