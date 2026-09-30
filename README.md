@@ -1,11 +1,11 @@
 # file-server
 
-一个简单的文件站点：**整个站点都要超级码**。输入一次超级码后可以浏览、下载、
-上传、删除、重命名、移动、复制，解锁状态保持 12 小时，中途不用反复输码。
+一个简单的文件站点：全站需要访问码。只读码可浏览、下载；管理码还可上传、删除、
+重命名、移动、复制。登录状态保持 12 小时。
 
 ## 特性
 
-- 全站超级码：没有码连文件列表都看不到，浏览与写操作一视同仁
+- 两级访问码：没有码连文件列表都看不到，只读码不能修改文件
 - 解锁一次管 12 小时：状态放在签名 Cookie 里，浏览器点下载链接也带得动
 - 路径限制在根目录内，`..`、绝对路径等越界访问一律拒绝
 - 配额上限，上传与复制前检查
@@ -17,20 +17,20 @@
 | --- | --- |
 | 根目录 | 只允许访问 `FILE_ROOT` 及其子目录，越界路径直接拒绝 |
 | 配额 | 默认 20GB（`FILE_MAX_BYTES`），上传/复制前校验 |
-| 超级码 | `FILE_ADMIN_CODE`，未设置时回退读 `/etc/super-code.env` 的 `SUPER_CODE` |
-| 解锁状态 | 超级码换来的签名 Cookie（HMAC，密钥就是超级码本身，改码即全部失效），12 小时 |
+| 访问码 | `/etc/file-server.env` 中分别设置 `FILE_READ_CODE` 与 `FILE_ADMIN_CODE`，两者不能相同 |
+| 解锁状态 | 对应角色的访问码签发的 Cookie（HMAC），12 小时，改码即使旧会话失效 |
 
 ## 鉴权
 
-整站一个码：只有 `/api/session`（查状态）、`/api/unlock`（解锁）、`/api/lock`（主动锁定）
-是免鉴权的，其余接口未解锁一律 401。
+只有 `/api/session`（查状态）、`/api/unlock`（解锁）、`/api/lock`（主动锁定）
+免鉴权；其余接口未解锁返回 401，只读会话访问修改接口返回 403。
 
-- 解锁：`POST /api/unlock`，body `{"code":"超级码"}`，成功后下发 12 小时有效的 Cookie
+- 解锁：`POST /api/unlock`，body `{"code":"访问码"}`，成功后下发 12 小时有效的 Cookie 和角色
 - 之后浏览器怎么操作都不用再带码：下载是直接点链接，靠同一个 Cookie 放行
 - 主动锁定：`POST /api/lock`，会清掉 Cookie，页面回到解锁页
-- 换超级码 = 让所有已下发的 Cookie 立即失效（签名密钥就是码）
+- 更换对应访问码会让该角色已签发的 Cookie 失效
 
-> 这个服务**没有**多用户与权限体系，"超级码"就是一个共享口令：拿到码的人能读写全站。
+> 这个服务没有多用户体系；只读和管理是两种共享口令。管理码持有者能读写全站。
 > 文件内容本身存在 `FILE_ROOT`，只由 nginx 反代 `/api/`，静态目录不直接暴露文件树。
 
 ## 快速开始
@@ -51,6 +51,7 @@ FILE_HOST=127.0.0.1
 FILE_ROOT=/opt/file-server/root
 FILE_DATA_DIR=/opt/file-server/data
 FILE_ADMIN_CODE=换成你的管理码
+FILE_READ_CODE=换成独立的只读码
 EOF
 chmod 600 /etc/file-server.env
 ```
@@ -115,7 +116,8 @@ curl -b /tmp/fs.jar 'http://127.0.0.1:8801/api/list?path=/'
 | `FILE_ROOT` | `/opt/file-server/root` | 文件根目录 |
 | `FILE_DATA_DIR` | `/opt/file-server/data` | 元数据目录 |
 | `FILE_MAX_BYTES` | `21474836480` | 配额上限（字节） |
-| `FILE_ADMIN_CODE` | — | 全站超级码；不设置时回退读 `/etc/super-code.env` 的 `SUPER_CODE` |
+| `FILE_ADMIN_CODE` | — | 管理码，必填 |
+| `FILE_READ_CODE` | — | 只读码，必填，不能与管理码相同 |
 
 ## License
 

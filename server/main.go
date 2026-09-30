@@ -42,8 +42,9 @@ var (
 	rootReal string // realpath，用于挡符号链接越界
 	capBytes int64
 	dataDir  string
-	// 全站访问码（超级码）：所有接口都要先解锁才可用
+	// 两种访问码分别提供只读与管理权限
 	adminCode string
+	readCode  string
 )
 
 // rootPaths 把「根目录」与它的 realpath 绑在一起，
@@ -76,23 +77,6 @@ func envInt(key string, def int64) int64 {
 	return n
 }
 
-// loadFallbackCode 在没配 FILE_ADMIN_CODE 时，回退读本机共用超级码
-// （/etc/super-code.env，2026-09-21 前叫 /etc/codex-chat.env）。
-// 保持跟 Node 版一致：读不到就当没配。
-func loadFallbackCode() string {
-	data, err := os.ReadFile("/etc/super-code.env")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if v, ok := strings.CutPrefix(line, "SUPER_CODE="); ok {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
-}
-
 func main() {
 	port = int(envInt("FILE_PORT", defaultPort))
 	host = os.Getenv("FILE_HOST")
@@ -119,8 +103,12 @@ func main() {
 	}
 
 	adminCode = strings.TrimSpace(os.Getenv("FILE_ADMIN_CODE"))
-	if adminCode == "" {
-		adminCode = loadFallbackCode()
+	readCode = strings.TrimSpace(os.Getenv("FILE_READ_CODE"))
+	if adminCode == "" || readCode == "" {
+		log.Fatal("文件站需要分别配置 FILE_ADMIN_CODE 与 FILE_READ_CODE")
+	}
+	if readCode == adminCode {
+		log.Fatal("文件站只读码不能与管理码相同")
 	}
 
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -527,8 +515,9 @@ func route(w http.ResponseWriter, r *http.Request) error {
 	switch {
 	case r.Method == http.MethodGet && endpoint == "/api/session":
 		sendJSON(w, http.StatusOK, map[string]any{
-			"configured": adminCode != "",
+			"configured": adminCode != "" || readCode != "",
 			"unlocked":   isUnlocked(r),
+			"role":       sessionRole(r),
 		})
 		return nil
 
@@ -537,15 +526,20 @@ func route(w http.ResponseWriter, r *http.Request) error {
 		if err != nil {
 			return err
 		}
-		if adminCode == "" {
+		if adminCode == "" && readCode == "" {
 			return errStatus(http.StatusServiceUnavailable, "服务端没有配置访问码")
 		}
 		code := str(body, "code")
-		if code == "" || !safeEqual(code, adminCode) {
-			return errStatus(http.StatusUnauthorized, "超级码不正确")
+		role := ""
+		if code != "" && safeEqual(code, adminCode) {
+			role = "admin"
+		} else if code != "" && safeEqual(code, readCode) {
+			role = "read"
+		} else {
+			return errStatus(http.StatusUnauthorized, "访问码不正确")
 		}
-		setSessionCookie(w)
-		sendJSON(w, http.StatusOK, map[string]any{"ok": true})
+		setSessionCookie(w, code)
+		sendJSON(w, http.StatusOK, map[string]any{"ok": true, "role": role})
 		return nil
 
 	case r.Method == http.MethodPost && endpoint == "/api/lock":
@@ -554,9 +548,12 @@ func route(w http.ResponseWriter, r *http.Request) error {
 		return nil
 	}
 
-	// 除了上面三个接口，整站都要先解锁：浏览、下载、上传、改名、删除一视同仁
-	if !isUnlocked(r) {
-		return errStatus(http.StatusUnauthorized, "需要超级码")
+	role := sessionRole(r)
+	if role == "" {
+		return errStatus(http.StatusUnauthorized, "需要访问码")
+	}
+	if role != "admin" && r.Method != http.MethodGet {
+		return errStatus(http.StatusForbidden, "只读会话无权修改文件")
 	}
 
 	switch {

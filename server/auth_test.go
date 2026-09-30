@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -41,6 +43,27 @@ func TestSessionToken(t *testing.T) {
 	}
 	if verifySessionToken(token, "", now) {
 		t.Fatal("服务端没配访问码时不应放行")
+	}
+}
+
+func TestReadOnlyCannotWrite(t *testing.T) {
+	previousAdmin, previousRead := adminCode, readCode
+	adminCode, readCode = "test-admin", "test-reader"
+	defer func() { adminCode, readCode = previousAdmin, previousRead }()
+
+	request := httptest.NewRequest(http.MethodPost, "/api/delete", strings.NewReader(`{"path":"/x"}`))
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: makeSessionToken(readCode, time.Now())})
+	response := httptest.NewRecorder()
+	handleAPI(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("只读会话写入应返回 403，实际 %d", response.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/session", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: makeSessionToken(readCode, time.Now())})
+	response = httptest.NewRecorder()
+	handleAPI(response, request)
+	if !strings.Contains(response.Body.String(), `"role":"read"`) {
+		t.Fatalf("会话应标识为只读：%s", response.Body.String())
 	}
 }
 

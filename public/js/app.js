@@ -6,6 +6,7 @@
   var state = {
     path: '/',
     unlocked: false,     // 是否已用超级码解锁；解锁状态在服务端 Cookie 里，保持 12 小时
+    role: '',
     entries: [],
     cap: 20 * 1024 * 1024 * 1024,
     used: 0,
@@ -78,8 +79,9 @@
     // Cookie 过期或被清掉：回到解锁页，而不是留一个空列表
     if (res.status === 401) {
       state.unlocked = false;
+      state.role = '';
       applyLockedUi();
-      gateHint('解锁状态已过期，请重新输入超级码');
+      gateHint('解锁状态已过期，请重新输入访问码');
     }
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
     return data;
@@ -462,7 +464,7 @@
     row.appendChild(nameWrap);
     row.appendChild(meta);
 
-    if (state.unlocked) {
+    if (state.role === 'admin') {
       var more = document.createElement('button');
       more.type = 'button';
       more.className = 'row-more';
@@ -491,7 +493,7 @@
   function renderList(entries) {
     var listEl = $('list');
     if (!entries.length) {
-      listEl.innerHTML = state.unlocked
+      listEl.innerHTML = state.role === 'admin'
         ? '<div class="empty">这里还没有文件<span class="empty-hint">把文件拖到这里，或点上方「上传」</span></div>'
         : '<div class="empty">这里还没有文件</div>';
       return;
@@ -614,7 +616,9 @@
     $('lock-btn').classList.toggle('hidden', locked);
     $('refresh-btn').classList.toggle('hidden', locked);
     $('toolbar-actions').classList.toggle('hidden', locked);
-    document.body.classList.toggle('is-admin', !locked);
+    $('mkdir-btn').classList.toggle('hidden', state.role !== 'admin');
+    $('upload-btn').classList.toggle('hidden', state.role !== 'admin');
+    document.body.classList.toggle('is-admin', state.role === 'admin');
     document.body.classList.toggle('locked', locked);
   }
 
@@ -625,21 +629,23 @@
   }
 
   async function unlock(code) {
-    await postJson('/api/unlock', { code: code });
+    var result = await postJson('/api/unlock', { code: code });
     state.unlocked = true;
+    state.role = result.role || '';
     applyLockedUi();
     gateHint('');
-    toast('已解锁');
+    toast(state.role === 'admin' ? '已进入管理模式' : '已进入只读模式');
     loadList();
   }
 
   async function lock() {
     try { await postJson('/api/lock'); } catch (e) {}
     state.unlocked = false;
+    state.role = '';
     state.path = '/';
     state.entries = [];
     applyLockedUi();
-    gateHint('已锁定，请重新输入超级码');
+    gateHint('已锁定，请重新输入访问码');
     $('gate-input').focus();
   }
 
@@ -739,23 +745,23 @@
     return !!dt && Array.prototype.indexOf.call(dt.types || [], 'Files') >= 0;
   }
   document.addEventListener('dragover', function (ev) {
-    if (!state.unlocked || !isFileDrag(ev)) return;
+    if (state.role !== 'admin' || !isFileDrag(ev)) return;
     ev.preventDefault();
     ev.dataTransfer.dropEffect = 'copy';
   });
   document.addEventListener('dragenter', function (ev) {
-    if (!state.unlocked || !isFileDrag(ev)) return;
+    if (state.role !== 'admin' || !isFileDrag(ev)) return;
     ev.preventDefault();
     dragDepth++;
     $('drop-hint').classList.remove('hidden');
   });
   document.addEventListener('dragleave', function (ev) {
-    if (!state.unlocked || !isFileDrag(ev)) return;
+    if (state.role !== 'admin' || !isFileDrag(ev)) return;
     dragDepth = Math.max(0, dragDepth - 1);
     if (!dragDepth) $('drop-hint').classList.add('hidden');
   });
   document.addEventListener('drop', function (ev) {
-    if (!state.unlocked || !isFileDrag(ev)) return;
+    if (state.role !== 'admin' || !isFileDrag(ev)) return;
     ev.preventDefault();
     dragDepth = 0;
     $('drop-hint').classList.add('hidden');
@@ -799,6 +805,7 @@
   api('/api/session').then(function (data) {
     if (data && data.unlocked) {
       state.unlocked = true;
+      state.role = data.role || '';
       applyLockedUi();
       loadList();
       api('/api/usage').then(function (usage) {

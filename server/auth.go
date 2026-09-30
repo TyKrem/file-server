@@ -1,9 +1,9 @@
 package main
 
-// 全站鉴权：整个文件服务都要超级码，输一次换一个 12 小时有效的签名 Cookie。
+// 全站鉴权：访问码只读，管理码可修改文件；两种会话互不通用。
 //
 // 用 Cookie 而不是每个请求带 X-Admin-Code 头，是因为浏览器点下载链接时加不了
-// 自定义请求头；签名密钥就是访问码本身，改码即让所有旧 Cookie 失效，
+// 自定义请求头；签名密钥就是对应角色的访问码，改码即让旧 Cookie 失效，
 // 不额外引入配置。
 
 import (
@@ -50,20 +50,31 @@ func verifySessionToken(token string, code string, now time.Time) bool {
 }
 
 func isUnlocked(r *http.Request) bool {
-	c, err := r.Cookie(sessionCookieName)
-	if err != nil {
-		return false
-	}
-	return verifySessionToken(c.Value, adminCode, time.Now())
+	return sessionRole(r) != ""
 }
 
-func setSessionCookie(w http.ResponseWriter) {
+func sessionRole(r *http.Request) string {
+	c, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	if verifySessionToken(c.Value, adminCode, time.Now()) {
+		return "admin"
+	}
+	if verifySessionToken(c.Value, readCode, time.Now()) {
+		return "read"
+	}
+	return ""
+}
+
+func setSessionCookie(w http.ResponseWriter, code string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     sessionCookieName,
-		Value:    makeSessionToken(adminCode, time.Now()),
+		Value:    makeSessionToken(code, time.Now()),
 		Path:     "/",
 		MaxAge:   sessionCookieAge,
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
@@ -75,6 +86,7 @@ func clearSessionCookie(w http.ResponseWriter) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
+		Secure:   true,
 		SameSite: http.SameSiteStrictMode,
 	})
 }
