@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -76,6 +78,49 @@ func TestReadOnlyCannotWrite(t *testing.T) {
 	handleAPI(response, request)
 	if !strings.Contains(response.Body.String(), `"role":"read"`) {
 		t.Fatalf("会话应标识为只读：%s", response.Body.String())
+	}
+}
+
+func TestFileSiteOriginsAndPermissions(t *testing.T) {
+	previousRoot, previousSecret, previousPaths := root, sessionSecret, filePaths
+	root, sessionSecret = t.TempDir(), "test-session-secret"
+	filePaths = rootPaths{dir: root, real: root}
+	defer func() { root, sessionSecret, filePaths = previousRoot, previousSecret, previousPaths }()
+
+	cases := []struct {
+		name   string
+		origin string
+		role   string
+		status int
+	}{
+		{"主入口管理会话", "https://file.tykrem.top", "admin", http.StatusOK},
+		{"IPv4入口管理会话", "https://file4.tykrem.top", "admin", http.StatusOK},
+		{"IPv4入口只读会话", "https://file4.tykrem.top", "read", http.StatusForbidden},
+		{"IPv4入口无会话", "https://file4.tykrem.top", "", http.StatusUnauthorized},
+		{"其他来源", "https://evil.example", "admin", http.StatusForbidden},
+		{"伪装子域名", "https://file4.tykrem.top.evil.example", "admin", http.StatusForbidden},
+		{"不安全协议", "http://file4.tykrem.top", "admin", http.StatusForbidden},
+	}
+	for _, item := range cases {
+		t.Run(item.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/mkdir", strings.NewReader(`{"path":"/","name":"`+item.name+`"}`))
+			request.Header.Set("Origin", item.origin)
+			if item.role != "" {
+				request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: testSessionToken(item.role, sessionSecret, time.Now())})
+			}
+			response := httptest.NewRecorder()
+			handleAPI(response, request)
+			if response.Code != item.status {
+				t.Fatalf("请求状态应为 %d，实际 %d：%s", item.status, response.Code, response.Body.String())
+			}
+			_, err := os.Stat(filepath.Join(root, item.name))
+			if item.status == http.StatusOK && err != nil {
+				t.Fatalf("允许的写入应创建目录：%v", err)
+			}
+			if item.status != http.StatusOK && !os.IsNotExist(err) {
+				t.Fatalf("被拒绝的写入不应创建目录，实际错误：%v", err)
+			}
+		})
 	}
 }
 

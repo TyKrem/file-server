@@ -504,7 +504,8 @@ func route(w http.ResponseWriter, r *http.Request) error {
 	// Go 1.22 起 ServeMux 直接把方法带进 pattern，但这里要跟原来一样对
 	// 「路径对、方法不对」也回 404 而不是 405，所以自己分派。
 	endpoint := r.URL.Path
-	if r.Method == http.MethodPost && r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "https://file.tykrem.top" {
+	origin := r.Header.Get("Origin")
+	if r.Method == http.MethodPost && origin != "" && origin != "https://file.tykrem.top" && origin != "https://file4.tykrem.top" {
 		return errStatus(http.StatusForbidden, "请求来源无效")
 	}
 
