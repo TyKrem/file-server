@@ -107,6 +107,7 @@ input { font: inherit; }
 }
 .brand-icon { font-size: 19px; }
 .appbar-actions { display: flex; align-items: center; gap: 8px; }
+.appbar-home { text-decoration: none; }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -405,6 +406,7 @@ body:not(.is-admin) .admin-only { display: none !important; }
 
 /* ---------- 移动端 ---------- */
 @media (max-width: 640px) {
+  .appbar-home { padding-inline: 9px; }
   .admin-label { display: none; }
   .brand-name { font-size: 16px; }
   .wrap { padding: 10px 10px calc(32px + env(safe-area-inset-bottom)); }
