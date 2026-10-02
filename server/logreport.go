@@ -3,7 +3,7 @@ package main
 // 把启动与 5xx 报到日志中心（log.tykrem.top）。
 //
 // 令牌优先用环境变量 FILE_LOG_TOKEN，没有就读 /etc/log-app.env 的 LOG_INGEST_TOKEN
-// ——同机服务共用一份写入令牌，省得再往 /etc/file-server.env 里抄一遍。
+// 同机服务共用日志中心的写入令牌，避免重复保存。
 // 只报「启动」与「服务端故障」，不报每次请求：这个站是公开的，逐请求上报会把日志刷爆。
 
 import (

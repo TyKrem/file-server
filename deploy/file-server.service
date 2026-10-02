@@ -6,8 +6,7 @@ After=network-online.target
 Type=simple
 User=root
 Group=root
-# 文件站必须有独立的只读码和管理码
-EnvironmentFile=/etc/file-server.env
+# 登录权限由统一会话校验，文件目录和配额在本单元配置。
 EnvironmentFile=/etc/auth-session.env
 Environment=FILE_HOST=127.0.0.1
 Environment=FILE_PORT=8801

@@ -43,14 +43,8 @@ cp -a public/. /opt/file-server/public/
 # 只用到标准库 + golang.org/x/text（中文排序），编译成单个可执行文件
 go build -ldflags="-s -w" -o /opt/file-server/file-server ./server
 
-cat > /etc/file-server.env <<'EOF'
-FILE_PORT=8801
-FILE_HOST=127.0.0.1
-FILE_ROOT=/opt/file-server/root
-FILE_DATA_DIR=/opt/file-server/data
-EOF
-chmod 600 /etc/file-server.env
-# 另需 /etc/auth-session.env，见 auth-app/README.md
+# 监听地址、文件目录和配额在 deploy/file-server.service 中配置。
+# 登录校验需 /etc/auth-session.env，见 auth-app/README.md。
 ```
 
 systemd 单元参考 `deploy/file-server.service`，站点配置参考
