@@ -6,7 +6,7 @@
 
   var state = {
     path: '/',
-    unlocked: false,     // 是否已用超级码解锁；解锁状态在服务端 Cookie 里，保持 12 小时
+    unlocked: false,     // 登录状态由服务端签名 Cookie 判断
     role: '',
     entries: [],
     cap: 20 * 1024 * 1024 * 1024,
@@ -82,7 +82,7 @@
       state.unlocked = false;
       state.role = '';
       applyLockedUi();
-      gateHint('登录状态已过期，请重新登录');
+      gateHint('请登录后继续使用');
     }
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
     return data;

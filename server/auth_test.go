@@ -29,12 +29,12 @@ func TestSessionToken(t *testing.T) {
 	if verifySessionToken(token, secret, now) != "read" {
 		t.Fatal("刚签发的令牌应该有效")
 	}
-	// 有效期 12 小时：11 小时后仍有效，13 小时后过期
-	if verifySessionToken(token, secret, now.Add(11*time.Hour)) != "read" {
-		t.Fatal("11 小时后仍应在有效期内")
+	// 一周内可继续使用，超过一周必须失效。
+	if verifySessionToken(token, secret, now.Add(6*24*time.Hour)) != "read" {
+		t.Fatal("第 6 天仍应在有效期内")
 	}
-	if verifySessionToken(token, secret, now.Add(13*time.Hour)) != "" {
-		t.Fatal("超过 12 小时应该失效")
+	if verifySessionToken(token, secret, now.Add(8*24*time.Hour)) != "" {
+		t.Fatal("超过一周应该失效")
 	}
 	// 换了访问码就认不出来
 	if verifySessionToken(token, "another-code", now) != "" {

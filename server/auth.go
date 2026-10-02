@@ -13,7 +13,7 @@ import (
 )
 
 const sessionCookieName = "tykrem_session"
-const sessionCookieAge = 12 * time.Hour
+const sessionCookieAge = 7 * 24 * time.Hour
 
 type sessionClaims struct {
 	Version int    `json:"v"`
