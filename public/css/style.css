@@ -86,11 +86,12 @@ input { font: inherit; }
   top: 0;
   z-index: 20;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  height: 56px;
-  padding: 0 12px;
+  min-height: 56px;
+  padding: 8px 12px;
   background: var(--elev);
   border-bottom: 1px solid var(--line);
 }
@@ -106,7 +107,7 @@ input { font: inherit; }
   font-size: 17px;
 }
 .brand-icon { font-size: 19px; }
-.appbar-actions { display: flex; align-items: center; gap: 8px; }
+.appbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
 .appbar-home { text-decoration: none; }
 
 /* ---------- 按钮 ---------- */
