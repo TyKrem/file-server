@@ -1,12 +1,12 @@
 # file-server
 
-一个简单的文件站点：全站需要访问码。只读码可浏览、下载；管理码还可上传、删除、
+一个简单的文件站点：全站需要统一登录。只读会话可浏览、下载；管理会话还可上传、删除、
 重命名、移动、复制。登录状态保持 12 小时。
 
 ## 特性
 
-- 两级访问码：没有码连文件列表都看不到，只读码不能修改文件
-- 解锁一次管 12 小时：状态放在签名 Cookie 里，浏览器点下载链接也带得动
+- 两级会话：未登录看不到文件列表，只读会话不能修改文件
+- 登录一次管 12 小时：状态放在签名 Cookie 里，浏览器点下载链接也带得动
 - 路径限制在根目录内，`..`、绝对路径等越界访问一律拒绝
 - 配额上限，上传与复制前检查
 - **单二进制 Go 服务**，编译出来直接跑，目标机器不需要装运行时
@@ -17,18 +17,16 @@
 | --- | --- |
 | 根目录 | 只允许访问 `FILE_ROOT` 及其子目录，越界路径直接拒绝 |
 | 配额 | 默认 20GB（`FILE_MAX_BYTES`），上传/复制前校验 |
-| 访问码 | `/etc/file-server.env` 中分别设置 `FILE_READ_CODE` 与 `FILE_ADMIN_CODE`，两者不能相同 |
-| 解锁状态 | 对应角色的访问码签发的 Cookie（HMAC），12 小时，改码即使旧会话失效 |
+| 登录码 | 由独立的 `auth-app` 管理，文件站只读取 `/etc/auth-session.env` 的签名密钥 |
+| 会话 | 统一登录签发的 Cookie（HMAC），12 小时；轮换签名密钥立即撤销旧会话 |
 
 ## 鉴权
 
-只有 `/api/session`（查状态）、`/api/unlock`（解锁）、`/api/lock`（主动锁定）
-免鉴权；其余接口未解锁返回 401，只读会话访问修改接口返回 403。
+`/api/session`（查状态）与 `/api/lock`（退出）免鉴权；`/api/unlock` 已停用并返回 410。其余接口未登录返回 401，只读会话访问修改接口返回 403。
 
-- 解锁：`POST /api/unlock`，body `{"code":"访问码"}`，成功后下发 12 小时有效的 Cookie 和角色
-- 之后浏览器怎么操作都不用再带码：下载是直接点链接，靠同一个 Cookie 放行
-- 主动锁定：`POST /api/lock`，会清掉 Cookie，页面回到解锁页
-- 更换对应访问码会让该角色已签发的 Cookie 失效
+- 登录入口：`https://tykrem.top/auth/`，签发跨站会话
+- 浏览器下载直接带同一个 Cookie；文件站在每次请求验证只读或管理角色
+- 主动退出：`POST /api/lock` 清除共享 Cookie
 
 > 这个服务没有多用户体系；只读和管理是两种共享口令。管理码持有者能读写全站。
 > 文件内容本身存在 `FILE_ROOT`，只由 nginx 反代 `/api/`，静态目录不直接暴露文件树。
@@ -50,10 +48,9 @@ FILE_PORT=8801
 FILE_HOST=127.0.0.1
 FILE_ROOT=/opt/file-server/root
 FILE_DATA_DIR=/opt/file-server/data
-FILE_ADMIN_CODE=换成你的管理码
-FILE_READ_CODE=换成独立的只读码
 EOF
 chmod 600 /etc/file-server.env
+# 另需 /etc/auth-session.env，见 auth-app/README.md
 ```
 
 systemd 单元参考 `deploy/file-server.service`，站点配置参考
@@ -87,7 +84,7 @@ nginx 负责托管 `public/` 下的静态页，只有 `/api/` 反代给这个服
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/session` | 查会话状态：`{configured, unlocked}`（免鉴权）|
-| `POST` | `/api/unlock` | 用超级码换 Cookie（免鉴权）|
+| `POST` | `/api/unlock` | 旧入口，返回 410 |
 | `POST` | `/api/lock` | 清掉 Cookie（免鉴权）|
 | `GET` | `/api/list?path=` | 列目录 |
 | `GET` | `/api/download?path=` | 下载文件 |
@@ -99,12 +96,10 @@ nginx 负责托管 `public/` 下的静态页，只有 `/api/` 反代给这个服
 | `POST` | `/api/copy` | 复制 |
 | `POST` | `/api/mkdir` | 新建目录 |
 
-除前三个外，其余接口都要带解锁后的 Cookie；命令行验证：
+除前三个外，其余接口都要带统一登录签发的 Cookie；命令行验证：
 
 ```bash
-curl -c /tmp/fs.jar -X POST -H 'Content-Type: application/json' \
-  -d '{"code":"<超级码>"}' http://127.0.0.1:8801/api/unlock
-curl -b /tmp/fs.jar 'http://127.0.0.1:8801/api/list?path=/'
+curl -b 'tykrem_session=<从浏览器会话取出的令牌>' 'http://127.0.0.1:8801/api/list?path=/'
 ```
 
 ## 配置项
@@ -116,8 +111,7 @@ curl -b /tmp/fs.jar 'http://127.0.0.1:8801/api/list?path=/'
 | `FILE_ROOT` | `/opt/file-server/root` | 文件根目录 |
 | `FILE_DATA_DIR` | `/opt/file-server/data` | 元数据目录 |
 | `FILE_MAX_BYTES` | `21474836480` | 配额上限（字节） |
-| `FILE_ADMIN_CODE` | — | 管理码，必填 |
-| `FILE_READ_CODE` | — | 只读码，必填，不能与管理码相同 |
+| `AUTH_SESSION_SECRET` | — | 统一会话签名密钥，必填；由 systemd 从 `/etc/auth-session.env` 注入 |
 
 ## License
 

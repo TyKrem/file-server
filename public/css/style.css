@@ -75,7 +75,7 @@ body.modal-open { overflow: hidden; }
 }
 .gate-input:focus { border-color: var(--accent); outline: none; }
 .gate-hint { color: var(--danger); font-size: 12.5px; text-align: center; }
-.gate-submit { width: 100%; height: 42px; justify-content: center; }
+.gate-submit { width: 100%; height: 42px; justify-content: center; text-decoration: none; }
 
 button { font: inherit; color: inherit; cursor: pointer; }
 input { font: inherit; }

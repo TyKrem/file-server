@@ -42,9 +42,6 @@ var (
 	rootReal string // realpath，用于挡符号链接越界
 	capBytes int64
 	dataDir  string
-	// 两种访问码分别提供只读与管理权限
-	adminCode string
-	readCode  string
 )
 
 // rootPaths 把「根目录」与它的 realpath 绑在一起，
@@ -102,13 +99,9 @@ func main() {
 		dataDir = "/opt/file-server/data"
 	}
 
-	adminCode = strings.TrimSpace(os.Getenv("FILE_ADMIN_CODE"))
-	readCode = strings.TrimSpace(os.Getenv("FILE_READ_CODE"))
-	if adminCode == "" || readCode == "" {
-		log.Fatal("文件站需要分别配置 FILE_ADMIN_CODE 与 FILE_READ_CODE")
-	}
-	if readCode == adminCode {
-		log.Fatal("文件站只读码不能与管理码相同")
+	sessionSecret = strings.TrimSpace(os.Getenv("AUTH_SESSION_SECRET"))
+	if len(sessionSecret) < 32 {
+		log.Fatal("文件站缺少统一会话签名密钥")
 	}
 
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -139,12 +132,12 @@ func main() {
 		// 上传大文件可能跑很久，写超时不能设；读超时同理交给客户端的流控。
 	}
 	log.Printf("file server listening on http://%s:%d", host, port)
-	log.Printf("root=%s cap=%d codeConfigured=%v", root, capBytes, adminCode != "")
+	log.Printf("root=%s cap=%d loginConfigured=%v", root, capBytes, sessionSecret != "")
 	reportLog("info", "文件服务启动", map[string]any{
-		"port":           port,
-		"root":           root,
-		"quotaBytes":     capBytes,
-		"codeConfigured": adminCode != "",
+		"port":            port,
+		"root":            root,
+		"quotaBytes":      capBytes,
+		"loginConfigured": sessionSecret != "",
 	})
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("服务退出：%v", err)
@@ -511,36 +504,21 @@ func route(w http.ResponseWriter, r *http.Request) error {
 	// Go 1.22 起 ServeMux 直接把方法带进 pattern，但这里要跟原来一样对
 	// 「路径对、方法不对」也回 404 而不是 405，所以自己分派。
 	endpoint := r.URL.Path
+	if r.Method == http.MethodPost && r.Header.Get("Origin") != "" && r.Header.Get("Origin") != "https://file.tykrem.top" {
+		return errStatus(http.StatusForbidden, "请求来源无效")
+	}
 
 	switch {
 	case r.Method == http.MethodGet && endpoint == "/api/session":
 		sendJSON(w, http.StatusOK, map[string]any{
-			"configured": adminCode != "" || readCode != "",
+			"configured": sessionSecret != "",
 			"unlocked":   isUnlocked(r),
 			"role":       sessionRole(r),
 		})
 		return nil
 
 	case r.Method == http.MethodPost && endpoint == "/api/unlock":
-		body, err := readJSON(r)
-		if err != nil {
-			return err
-		}
-		if adminCode == "" && readCode == "" {
-			return errStatus(http.StatusServiceUnavailable, "服务端没有配置访问码")
-		}
-		code := str(body, "code")
-		role := ""
-		if code != "" && safeEqual(code, adminCode) {
-			role = "admin"
-		} else if code != "" && safeEqual(code, readCode) {
-			role = "read"
-		} else {
-			return errStatus(http.StatusUnauthorized, "访问码不正确")
-		}
-		setSessionCookie(w, code)
-		sendJSON(w, http.StatusOK, map[string]any{"ok": true, "role": role})
-		return nil
+		return errStatus(http.StatusGone, "请使用统一登录入口")
 
 	case r.Method == http.MethodPost && endpoint == "/api/lock":
 		clearSessionCookie(w)
@@ -550,7 +528,7 @@ func route(w http.ResponseWriter, r *http.Request) error {
 
 	role := sessionRole(r)
 	if role == "" {
-		return errStatus(http.StatusUnauthorized, "需要访问码")
+		return errStatus(http.StatusUnauthorized, "需要登录")
 	}
 	if role != "admin" && r.Method != http.MethodGet {
 		return errStatus(http.StatusForbidden, "只读会话无权修改文件")

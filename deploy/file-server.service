@@ -8,6 +8,7 @@ User=root
 Group=root
 # 文件站必须有独立的只读码和管理码
 EnvironmentFile=/etc/file-server.env
+EnvironmentFile=/etc/auth-session.env
 Environment=FILE_HOST=127.0.0.1
 Environment=FILE_PORT=8801
 Environment=FILE_ROOT=/opt/file-server/root

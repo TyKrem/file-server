@@ -1,92 +1,67 @@
 package main
 
-// 全站鉴权：访问码只读，管理码可修改文件；两种会话互不通用。
-//
-// 用 Cookie 而不是每个请求带 X-Admin-Code 头，是因为浏览器点下载链接时加不了
-// 自定义请求头；签名密钥就是对应角色的访问码，改码即让旧 Cookie 失效，
-// 不额外引入配置。
+// 统一登录签发的会话在各站使用同一签名密钥；文件站仍自行决定只读与管理权限。
 
 import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 )
 
-const (
-	sessionCookieName = "file_session"
-	sessionCookieAge  = 12 * 60 * 60 // 秒，按半天
-)
+const sessionCookieName = "tykrem_session"
+const sessionCookieAge = 12 * time.Hour
 
-// makeSessionToken 生成 "过期时间.HMAC" 形式的 Cookie 值。
-func makeSessionToken(code string, now time.Time) string {
-	exp := strconv.FormatInt(now.Add(sessionCookieAge*time.Second).Unix(), 10)
-	return exp + "." + sessionSig(exp, code)
+type sessionClaims struct {
+	Version int    `json:"v"`
+	Role    string `json:"role"`
+	Expires int64  `json:"exp"`
 }
 
-func sessionSig(exp string, code string) string {
-	mac := hmac.New(sha256.New, []byte(code))
-	mac.Write([]byte("file-session:" + exp))
-	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
+var sessionSecret string
 
-// verifySessionToken 校验 Cookie：签名对且没过期才算解锁。
-func verifySessionToken(token string, code string, now time.Time) bool {
-	if code == "" || token == "" {
-		return false
+func verifySessionToken(token, secret string, now time.Time) string {
+	if secret == "" || len(token) > 512 {
+		return ""
 	}
-	parts := strings.SplitN(token, ".", 2)
-	if len(parts) != 2 {
-		return false
+	parts := strings.Split(token, ".")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return ""
 	}
-	exp, err := strconv.ParseInt(parts[0], 10, 64)
-	if err != nil || now.Unix() > exp {
-		return false
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(parts[0]))
+	expected := mac.Sum(nil)
+	actual, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || !hmac.Equal(actual, expected) {
+		return ""
 	}
-	return hmac.Equal([]byte(parts[1]), []byte(sessionSig(parts[0], code)))
-}
-
-func isUnlocked(r *http.Request) bool {
-	return sessionRole(r) != ""
-}
-
-func sessionRole(r *http.Request) string {
-	c, err := r.Cookie(sessionCookieName)
+	payload, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
 		return ""
 	}
-	if verifySessionToken(c.Value, adminCode, time.Now()) {
-		return "admin"
+	var claims sessionClaims
+	if json.Unmarshal(payload, &claims) != nil || claims.Version != 1 ||
+		(claims.Role != "admin" && claims.Role != "read") || claims.Expires <= now.Unix() ||
+		claims.Expires > now.Add(sessionCookieAge).Unix() {
+		return ""
 	}
-	if verifySessionToken(c.Value, readCode, time.Now()) {
-		return "read"
-	}
-	return ""
+	return claims.Role
 }
 
-func setSessionCookie(w http.ResponseWriter, code string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    makeSessionToken(code, time.Now()),
-		Path:     "/",
-		MaxAge:   sessionCookieAge,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+func isUnlocked(r *http.Request) bool { return sessionRole(r) != "" }
+
+func sessionRole(r *http.Request) string {
+	cookie, err := r.Cookie(sessionCookieName)
+	if err != nil {
+		return ""
+	}
+	return verifySessionToken(cookie.Value, sessionSecret, time.Now())
 }
 
 func clearSessionCookie(w http.ResponseWriter) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookieName,
-		Value:    "",
-		Path:     "/",
-		MaxAge:   -1,
-		HttpOnly: true,
-		Secure:   true,
-		SameSite: http.SameSiteStrictMode,
-	})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Domain: "tykrem.top", Path: "/",
+		MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode})
 }

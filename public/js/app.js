@@ -2,6 +2,7 @@
   'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
+  $('login-link').href = 'https://tykrem.top/auth/?next=' + encodeURIComponent(location.origin + '/');
 
   var state = {
     path: '/',
@@ -81,7 +82,7 @@
       state.unlocked = false;
       state.role = '';
       applyLockedUi();
-      gateHint('解锁状态已过期，请重新输入访问码');
+      gateHint('登录状态已过期，请重新登录');
     }
     if (!res.ok) throw new Error((data && data.error) || ('HTTP ' + res.status));
     return data;
@@ -628,16 +629,6 @@
     el.classList.toggle('hidden', !msg);
   }
 
-  async function unlock(code) {
-    var result = await postJson('/api/unlock', { code: code });
-    state.unlocked = true;
-    state.role = result.role || '';
-    applyLockedUi();
-    gateHint('');
-    toast(state.role === 'admin' ? '已进入管理模式' : '已进入只读模式');
-    loadList();
-  }
-
   async function lock() {
     try { await postJson('/api/lock'); } catch (e) {}
     state.unlocked = false;
@@ -645,29 +636,10 @@
     state.path = '/';
     state.entries = [];
     applyLockedUi();
-    gateHint('已锁定，请重新输入访问码');
-    $('gate-input').focus();
+    gateHint('已退出，请重新登录');
   }
 
   $('lock-btn').addEventListener('click', function () { lock(); });
-
-  $('gate-form').addEventListener('submit', async function (ev) {
-    ev.preventDefault();
-    var input = $('gate-input');
-    var code = input.value.trim();
-    if (!code) return;
-    var submit = $('gate-submit');
-    submit.disabled = true;
-    try {
-      await unlock(code);
-      input.value = '';
-    } catch (err) {
-      gateHint(err.message);
-      input.select();
-    } finally {
-      submit.disabled = false;
-    }
-  });
 
   /* ---------- 上传 ---------- */
 
@@ -815,9 +787,8 @@
       return;
     }
     if (data && data.configured === false) {
-      gateHint('服务端没有配置访问码，先设置 FILE_ADMIN_CODE 再重启服务');
+      gateHint('服务端尚未配置统一登录');
     }
-    $('gate-input').focus();
   }).catch(function (err) {
     gateHint('无法连接服务：' + err.message);
   });
