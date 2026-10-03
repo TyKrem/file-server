@@ -6,15 +6,14 @@
   --accent: #0b63ce; --accent-soft: #e9f2ff; --danger: #c6444e;
   --radius: 18px; --shadow: 0 20px 70px rgba(20, 51, 94, .14);
 }
-@media (prefers-color-scheme: dark) {
-  :root {
+:root[data-theme="dark"] {
     color-scheme: dark;
     --bg: #0c1729; --elev: #14233b; --soft: #1c2f4c;
     --line: #49627f; --line-soft: #293e5b; --text: #f0f6ff;
     --muted: #b9cce4; --accent: #80b8ff; --accent-soft: #203d63; --danger: #ff8590;
     --shadow: 0 20px 70px rgba(0, 0, 0, .4);
   }
-}
+
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -50,7 +49,7 @@ button, a, input, select { touch-action: manipulation; }
 }
 .btn:hover, .icon-btn:hover { background: var(--soft); border-color: var(--muted); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .btn.primary { color: #0c2344; } }
+:root[data-theme="dark"] .btn.primary { color: #0c2344; }
 .btn.primary:hover { filter: brightness(.94); }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
@@ -97,12 +96,8 @@ h1 { margin: 9px 0 8px; font-size: 30px; font-weight: 650; letter-spacing: -1px;
 .row-icon.image { background: #edf0ff; color: #6978ba; }
 .row-icon.media { background: #ffeef2; color: #b46b7e; }
 .row-icon.archive { background: #eef3f8; color: #6e8bad; }
-@media (prefers-color-scheme: dark) {
-  .row-icon.folder { background: #3b3220; color: #e1bc69; }
-  .row-icon.image { background: #2c2d43; color: #a6aff0; }
-  .row-icon.media { background: #412b35; color: #e8a6bd; }
-  .row-icon.archive { background: #273242; color: #a0bfde; }
-}
+:root[data-theme="dark"] .row-icon.folder { background: #3b3220; color: #e1bc69; }:root[data-theme="dark"] .row-icon.image { background: #2c2d43; color: #a6aff0; }:root[data-theme="dark"] .row-icon.media { background: #412b35; color: #e8a6bd; }:root[data-theme="dark"] .row-icon.archive { background: #273242; color: #a0bfde; }
+
 .row-icon .icon { width: 23px; height: 23px; }
 .row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .name-btn, .name-link { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 0; border: 0; background: none; font: inherit; font-weight: 550; text-align: left; color: var(--text); text-decoration: none; }
