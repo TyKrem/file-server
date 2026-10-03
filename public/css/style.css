@@ -1,17 +1,17 @@
 /* 色彩集中管理，文件列表与弹窗共用，深色模式保持同样的层次。 */
 :root {
   color-scheme: light;
-  --bg: #f5f7f8; --elev: #fff; --soft: #f1f5f4;
-  --line: #e0e7e5; --line-soft: #edf1f0; --text: #202e2b; --muted: #75827e;
-  --accent: #087f6b; --accent-soft: #e6f5ef; --danger: #c6444e;
-  --radius: 18px; --shadow: 0 20px 70px rgba(25, 48, 40, .14);
+  --bg: #f3f7fd; --elev: #fff; --soft: #edf3fc;
+  --line: #c8d6e8; --line-soft: #e0e8f3; --text: #14233d; --muted: #53657e;
+  --accent: #0b63ce; --accent-soft: #e9f2ff; --danger: #c6444e;
+  --radius: 18px; --shadow: 0 20px 70px rgba(20, 51, 94, .14);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     color-scheme: dark;
-    --bg: #111917; --elev: #192320; --soft: #212e29;
-    --line: #30413a; --line-soft: #25342d; --text: #e4eee9;
-    --muted: #9aaea3; --accent: #65d6b1; --accent-soft: #213d31; --danger: #ff8590;
+    --bg: #0c1729; --elev: #14233b; --soft: #1c2f4c;
+    --line: #49627f; --line-soft: #293e5b; --text: #f0f6ff;
+    --muted: #b9cce4; --accent: #80b8ff; --accent-soft: #203d63; --danger: #ff8590;
     --shadow: 0 20px 70px rgba(0, 0, 0, .4);
   }
 }
@@ -50,7 +50,7 @@ button, a, input, select { touch-action: manipulation; }
 }
 .btn:hover, .icon-btn:hover { background: var(--soft); border-color: var(--muted); }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
-@media (prefers-color-scheme: dark) { .btn.primary { color: #112b21; } }
+@media (prefers-color-scheme: dark) { .btn.primary { color: #0c2344; } }
 .btn.primary:hover { filter: brightness(.94); }
 .btn.ghost { background: transparent; }
 .btn.danger { color: var(--danger); border-color: var(--danger); }
@@ -66,7 +66,7 @@ body:not(.is-admin) .admin-only { display: none !important; }
 h1 { margin: 9px 0 8px; font-size: 30px; font-weight: 650; letter-spacing: -1px; overflow-wrap: anywhere; }
 .folder-summary { margin: 0; color: var(--muted); font-size: 13px; }
 .toolbar-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
-.file-panel { background: var(--elev); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 4px 20px rgba(25, 48, 40, .025); }
+.file-panel { background: var(--elev); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 4px 20px rgba(20, 51, 94, .025); }
 .toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 20px 22px; }
 .path-nav { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
 .crumbs { display: flex; align-items: center; min-width: 0; overflow-x: auto; scrollbar-width: none; }
@@ -138,7 +138,7 @@ h1 { margin: 9px 0 8px; font-size: 30px; font-weight: 650; letter-spacing: -1px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 127, 107, .14);
+  background: rgba(11, 99, 206, .16);
   pointer-events: none;
 }
 .drop-hint-box {
