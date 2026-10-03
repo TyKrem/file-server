@@ -1,19 +1,29 @@
+'use strict';
+
 (function () {
-  'use strict';
 
   var $ = function (id) { return document.getElementById(id); };
-  $('login-link').href = 'https://tykrem.top/auth/?next=' + encodeURIComponent(location.origin + '/');
+  $('login-link').href = 'https://tykrem.top/auth/?next=' + encodeURIComponent(location.href);
 
   var state = {
     path: '/',
     unlocked: false,     // 登录状态由服务端签名 Cookie 判断
     role: '',
     entries: [],
+    query: '',
+    sort: 'name',
+    uploading: false,
     cap: 20 * 1024 * 1024 * 1024,
     used: 0,
   };
   var toastTimer = null;
   var modalOnClose = null;
+  var modalReturnFocus = null;
+  var listRequest = 0;
+
+  function iconMarkup(name) {
+    return '<svg class="icon" aria-hidden="true"><use href="#icon-' + name + '"/></svg>';
+  }
 
   /* ---------- 基础工具 ---------- */
 
@@ -96,6 +106,7 @@
 
   function openModal(opts) {
     var root = $('modal');
+    if (root.classList.contains('hidden')) modalReturnFocus = document.activeElement;
     root.className = 'modal' + (opts.variant ? ' ' + opts.variant : '');
 
     var title = $('modal-title');
@@ -123,6 +134,10 @@
     root.classList.remove('hidden');
     document.body.classList.add('modal-open');
     if (opts.onMount) opts.onMount(buttons);
+    else {
+      var firstControl = root.querySelector('button:not(:disabled), input, a[href]');
+      if (firstControl) firstControl.focus();
+    }
     return buttons;
   }
 
@@ -136,6 +151,7 @@
     var cb = modalOnClose;
     modalOnClose = null;
     if (cb) cb();
+    if (modalReturnFocus && modalReturnFocus.isConnected) modalReturnFocus.focus();
   }
 
   function openSheet(title, options) {
@@ -331,7 +347,7 @@
             btn.className = 'picker-item';
             var icon = document.createElement('span');
             icon.className = 'picker-item-icon';
-            icon.textContent = '📁';
+            icon.innerHTML = iconMarkup('folder');
             var name = document.createElement('span');
             name.textContent = entry.name;
             btn.appendChild(icon);
@@ -355,12 +371,27 @@
   });
   document.addEventListener('keydown', function (ev) {
     if (ev.key === 'Escape' && !$('modal').classList.contains('hidden')) closeModal();
+    if (ev.key === 'Tab' && !$('modal').classList.contains('hidden')) {
+      var controls = Array.from($('modal').querySelectorAll('button:not(:disabled), input, a[href]'));
+      if (!controls.length) return;
+      var first = controls[0];
+      var last = controls[controls.length - 1];
+      if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
+      else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
+    }
+    if (ev.key === '/' && state.unlocked && $('modal').classList.contains('hidden') &&
+        !ev.target.closest('input, textarea, select, [contenteditable]')) {
+      ev.preventDefault();
+      $('search-input').focus();
+    }
   });
 
   /* ---------- 导航 ---------- */
 
   function navigate(rel, push) {
     state.path = rel || '/';
+    state.query = '';
+    $('search-input').value = '';
     if (push) {
       var url = state.path === '/' ? location.pathname : location.pathname + '?path=' + encodeURIComponent(state.path);
       try { history.pushState({ path: state.path }, '', url); } catch (e) {}
@@ -376,7 +407,7 @@
     var rootBtn = document.createElement('button');
     rootBtn.type = 'button';
     rootBtn.className = 'crumb' + (state.path === '/' ? ' current' : '');
-    rootBtn.textContent = '根目录';
+    rootBtn.textContent = '全部文件';
     if (state.path !== '/') rootBtn.addEventListener('click', function () { navigate('/', true); });
     el.appendChild(rootBtn);
 
@@ -401,21 +432,14 @@
 
   /* ---------- 列表渲染 ---------- */
 
-  var EXT_ICON = {
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', bmp: '🖼️', svg: '🖼️', ico: '🖼️',
-    mp4: '🎬', mkv: '🎬', mov: '🎬', avi: '🎬', webm: '🎬',
-    mp3: '🎵', wav: '🎵', flac: '🎵', m4a: '🎵', ogg: '🎵',
-    pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗', ppt: '📙', pptx: '📙',
-    zip: '🗜️', rar: '🗜️', '7z': '🗜️', gz: '🗜️', tar: '🗜️',
-    txt: '📝', md: '📝', log: '📝',
-    js: '📜', json: '📜', css: '📜', html: '📜', py: '📜', sh: '📜',
-  };
-
   function iconFor(name, isDir) {
-    if (isDir) return '📁';
+    if (isDir) return 'folder';
     var dot = String(name).lastIndexOf('.');
     var ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
-    return EXT_ICON[ext] || '📄';
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'ico'].includes(ext)) return 'image';
+    if (['mp4', 'mkv', 'mov', 'avi', 'webm', 'mp3', 'wav', 'flac', 'm4a', 'ogg'].includes(ext)) return 'media';
+    if (['zip', 'rar', '7z', 'gz', 'tar'].includes(ext)) return 'archive';
+    return 'file';
   }
 
   function buildRow(item) {
@@ -426,8 +450,9 @@
     row.className = 'row';
 
     var icon = document.createElement('div');
-    icon.className = 'row-icon';
-    icon.textContent = iconFor(item.name, isDir);
+    var iconName = iconFor(item.name, isDir);
+    icon.className = 'row-icon ' + iconName;
+    icon.innerHTML = iconMarkup(iconName);
 
     var nameWrap = document.createElement('div');
     nameWrap.className = 'row-name';
@@ -465,27 +490,36 @@
     row.appendChild(nameWrap);
     row.appendChild(meta);
 
+    var actions = document.createElement('div');
+    actions.className = 'row-actions';
+    if (!isDir) {
+      var download = document.createElement('a');
+      download.className = 'row-download';
+      download.href = downloadUrl(rel);
+      download.setAttribute('download', item.name);
+      download.setAttribute('aria-label', '下载 ' + item.name);
+      download.title = '下载';
+      download.innerHTML = iconMarkup('download');
+      actions.appendChild(download);
+    }
     if (state.role === 'admin') {
       var more = document.createElement('button');
       more.type = 'button';
       more.className = 'row-more';
-      more.textContent = '⋯';
+      more.innerHTML = iconMarkup('more');
       more.title = '更多操作';
-      more.setAttribute('aria-label', '更多操作');
+      more.setAttribute('aria-label', '更多操作：' + item.name);
       more.addEventListener('click', function (ev) {
         ev.stopPropagation();
         openRowSheet(item, rel);
       });
-      row.appendChild(more);
-    } else {
-      var placeholder = document.createElement('div');
-      placeholder.className = 'row-more-placeholder';
-      row.appendChild(placeholder);
+      actions.appendChild(more);
     }
+    row.appendChild(actions);
 
     // 整行都可点：目录进入、文件下载，移动端可点面积更大
     row.addEventListener('click', function (ev) {
-      if (ev.target.closest('.row-more') || ev.target.closest('.name-btn') || ev.target.closest('.name-link')) return;
+      if (ev.target.closest('.row-actions') || ev.target.closest('.name-btn') || ev.target.closest('.name-link')) return;
       trigger.click();
     });
     return row;
@@ -493,15 +527,32 @@
 
   function renderList(entries) {
     var listEl = $('list');
+    var directories = entries.filter(function (entry) { return entry.type === 'dir'; }).length;
+    $('folder-title').textContent = baseName(state.path) || '全部文件';
+    $('folder-summary').textContent = directories + ' 个文件夹 · ' + (entries.length - directories) + ' 个文件';
+    var query = state.query.trim().toLocaleLowerCase();
+    var visible = entries.filter(function (entry) { return entry.name.toLocaleLowerCase().includes(query); });
+    visible.sort(function (first, second) {
+      if ((first.type === 'dir') !== (second.type === 'dir')) return first.type === 'dir' ? -1 : 1;
+      if (state.sort === 'newest' && first.mtime !== second.mtime) return second.mtime - first.mtime;
+      if (state.sort === 'size' && first.type !== 'dir' && first.size !== second.size) return second.size - first.size;
+      return first.name.localeCompare(second.name, 'zh-CN', { numeric: true });
+    });
+    $('search-clear').classList.toggle('hidden', !state.query);
+    $('list-count').textContent = query ? visible.length + ' / ' + entries.length + ' 项' : entries.length + ' 项';
+    if (query && !visible.length) {
+      listEl.innerHTML = '<div class="empty">' + iconMarkup('search') + '没有匹配的文件<span class="empty-hint">试试其他关键词，或清空搜索</span></div>';
+      return;
+    }
     if (!entries.length) {
       listEl.innerHTML = state.role === 'admin'
-        ? '<div class="empty">这里还没有文件<span class="empty-hint">把文件拖到这里，或点上方「上传」</span></div>'
-        : '<div class="empty">这里还没有文件</div>';
+        ? '<div class="empty">' + iconMarkup('folder') + '文件夹还是空的<span class="empty-hint">拖入文件，或点击「上传文件」开始</span></div>'
+        : '<div class="empty">' + iconMarkup('folder') + '文件夹还是空的</div>';
       return;
     }
     listEl.innerHTML = '';
     var frag = document.createDocumentFragment();
-    entries.forEach(function (item) { frag.appendChild(buildRow(item)); });
+    visible.forEach(function (item) { frag.appendChild(buildRow(item)); });
     listEl.appendChild(frag);
   }
 
@@ -515,16 +566,35 @@
   }
 
   async function loadList() {
+    if (!state.unlocked) return;
+    var request = ++listRequest;
+    var requestedPath = state.path;
     renderCrumbs();
+    $('login-link').href = 'https://tykrem.top/auth/?next=' + encodeURIComponent(location.href);
     var listEl = $('list');
+    listEl.setAttribute('aria-busy', 'true');
+    $('refresh-btn').disabled = true;
+    $('folder-title').textContent = baseName(state.path) || '全部文件';
+    $('folder-summary').textContent = '正在读取文件…';
     listEl.innerHTML = '<div class="empty">加载中…</div>';
     try {
-      var data = await api('/api/list?path=' + encodeURIComponent(state.path));
+      var data = await api('/api/list?path=' + encodeURIComponent(requestedPath));
+      // 快速切目录时旧请求可能更晚回来，只渲染最后一次导航的结果。
+      if (request !== listRequest || !state.unlocked) return;
       state.entries = data.entries || [];
       renderUsage(data.usage);
       renderList(state.entries);
     } catch (err) {
+      if (request !== listRequest) return;
+      state.entries = [];
+      $('folder-summary').textContent = '暂时无法读取目录';
+      $('list-count').textContent = '—';
       listEl.innerHTML = '<div class="empty">加载失败：' + esc(err.message) + '</div>';
+    } finally {
+      if (request === listRequest) {
+        listEl.setAttribute('aria-busy', 'false');
+        $('refresh-btn').disabled = false;
+      }
     }
   }
 
@@ -619,6 +689,7 @@
     $('toolbar-actions').classList.toggle('hidden', locked);
     $('mkdir-btn').classList.toggle('hidden', state.role !== 'admin');
     $('upload-btn').classList.toggle('hidden', state.role !== 'admin');
+    $('role-badge').textContent = state.role === 'admin' ? '管理' : '只读';
     document.body.classList.toggle('is-admin', state.role === 'admin');
     document.body.classList.toggle('locked', locked);
   }
@@ -676,8 +747,11 @@
   }
 
   async function uploadFiles(fileList) {
+    if (state.role !== 'admin' || state.uploading) return;
     var files = Array.prototype.slice.call(fileList || []);
     if (!files.length) return;
+    state.uploading = true;
+    $('upload-btn').disabled = true;
     var dir = state.path;
     var total = files.length;
     var finished = 0;
@@ -691,6 +765,8 @@
         });
         finished++;
       } catch (err) {
+        state.uploading = false;
+        $('upload-btn').disabled = false;
         hideProgress();
         toast('上传失败（' + file.name + '）：' + err.message);
         loadList();
@@ -698,6 +774,8 @@
       }
     }
     hideProgress();
+    state.uploading = false;
+    $('upload-btn').disabled = false;
     toast(total > 1 ? '已上传 ' + total + ' 个文件' : '已上传 ' + files[0].name);
     loadList();
   }
@@ -761,11 +839,27 @@
 
   $('back-btn').addEventListener('click', function () { navigate(parentPath(state.path), true); });
   $('refresh-btn').addEventListener('click', loadList);
+  $('search-input').addEventListener('input', function () {
+    state.query = this.value;
+    if ($('list').getAttribute('aria-busy') !== 'true') renderList(state.entries);
+  });
+  $('search-input').addEventListener('keydown', function (event) {
+    if (event.key === 'Escape') $('search-clear').click();
+  });
+  $('search-clear').addEventListener('click', function () {
+    state.query = '';
+    $('search-input').value = '';
+    if ($('list').getAttribute('aria-busy') !== 'true') renderList(state.entries);
+    $('search-input').focus();
+  });
+  $('sort-select').addEventListener('change', function () {
+    state.sort = this.value;
+    if ($('list').getAttribute('aria-busy') !== 'true') renderList(state.entries);
+  });
   $('brand').addEventListener('click', function () { if (state.path !== '/') navigate('/', true); });
 
   window.addEventListener('popstate', function (ev) {
-    state.path = (ev.state && ev.state.path) || pathFromUrl();
-    loadList();
+    navigate((ev.state && ev.state.path) || pathFromUrl(), false);
   });
 
   /* ---------- 启动 ---------- */
