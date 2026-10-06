@@ -8,7 +8,7 @@
   <script src="/theme.js?v=20261003-theme"></script>
 <title>文件服务 · file.tykrem.top</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%230b63ce' d='M3 6h6l2 2h10v12H3z'/%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/css/style.css?v=20261003-theme">
+  <link rel="stylesheet" href="/css/style.css?v=20261006-preview">
 <link rel="stylesheet" href="/theme.css?v=20261003-theme">
 </head>
 <body>
@@ -122,6 +122,18 @@
     </div>
   </div>
 
-  <script src="/js/app.js?v=20261003"></script>
+  <dialog id="image-dialog" class="image-dialog" aria-labelledby="image-title">
+    <header class="image-heading"><div><h2 id="image-title"></h2><span id="image-counter"></span></div><button id="image-close" class="icon-btn" type="button" aria-label="关闭图片预览"><svg class="icon"><use href="#icon-close"/></svg></button></header>
+    <div class="image-toolbar" aria-label="图片操作">
+      <button id="image-previous" class="btn" type="button" aria-label="上一张图片">←</button><button id="image-next" class="btn" type="button" aria-label="下一张图片">→</button>
+      <button id="image-zoom-out" class="btn" type="button" aria-label="缩小图片">−</button><button id="image-fit" class="btn" type="button" title="恢复适合窗口">适应</button><button id="image-zoom-in" class="btn" type="button" aria-label="放大图片">＋</button>
+      <button id="image-background" class="btn" type="button" aria-pressed="false" title="切换透明图片的背景">深色底</button>
+      <button id="image-copy" class="btn" type="button">复制链接</button><a id="image-download" class="btn primary" download>下载</a>
+    </div>
+    <div id="image-stage" class="image-stage" tabindex="0" aria-label="图片区域，可放大后拖动"><img id="image-content" alt="" draggable="false" hidden><p id="image-status" role="status">正在读取图片…</p></div>
+    <footer class="image-footer"><span id="image-size"></span><span>← → 切换 · 双击放大 · Esc 关闭</span></footer>
+  </dialog>
+  <script src="/js/image-viewer.js?v=20261006-preview"></script>
+  <script src="/js/app.js?v=20261006-preview"></script>
 </body>
 </html>

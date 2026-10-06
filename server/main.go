@@ -545,6 +545,8 @@ func route(w http.ResponseWriter, r *http.Request) error {
 
 	case r.Method == http.MethodGet && endpoint == "/api/download":
 		return handleDownload(w, r, filePaths)
+	case r.Method == http.MethodGet && endpoint == "/api/preview":
+		return handleImagePreview(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/mkdir":
 		return handleMkdir(w, r, filePaths)
 	case r.Method == http.MethodPost && endpoint == "/api/upload":

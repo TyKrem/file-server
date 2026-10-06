@@ -20,6 +20,20 @@
   var modalOnClose = null;
   var modalReturnFocus = null;
   var listRequest = 0;
+  var previewEntries = [];
+  var imageViewer = window.FileImageViewer.create({
+    toast: toast,
+    onChange: function (rel, opening) {
+      var url = new URL(location.href); url.searchParams.set('path', state.path); url.searchParams.set('image', rel);
+      var entry = { path: state.path, imageOverlay: opening || history.state?.imageOverlay === true };
+      if (opening) history.pushState(entry, '', url); else history.replaceState(entry, '', url);
+    },
+    onClose: function () {
+      if (history.state?.imageOverlay) { history.back(); return; }
+      var url = new URL(location.href); url.searchParams.delete('image'); history.replaceState({ path: state.path }, '', url);
+    },
+    onUnauthorized: function () { state.unlocked = false; state.role = ''; imageViewer.close(false); applyLockedUi(); gateHint('请登录后继续查看图片'); },
+  });
 
   function iconMarkup(name) {
     return '<svg class="icon" aria-hidden="true"><use href="#icon-' + name + '"/></svg>';
@@ -89,6 +103,7 @@
     try { data = await res.json(); } catch (e) {}
     // Cookie 过期或被清掉：回到解锁页，而不是留一个空列表
     if (res.status === 401) {
+      imageViewer.close(false);
       state.unlocked = false;
       state.role = '';
       applyLockedUi();
@@ -379,7 +394,7 @@
       if (ev.shiftKey && document.activeElement === first) { ev.preventDefault(); last.focus(); }
       else if (!ev.shiftKey && document.activeElement === last) { ev.preventDefault(); first.focus(); }
     }
-    if (ev.key === '/' && state.unlocked && $('modal').classList.contains('hidden') &&
+    if (ev.key === '/' && state.unlocked && !imageViewer.isOpen() && $('modal').classList.contains('hidden') &&
         !ev.target.closest('input, textarea, select, [contenteditable]')) {
       ev.preventDefault();
       $('search-input').focus();
@@ -389,6 +404,7 @@
   /* ---------- 导航 ---------- */
 
   function navigate(rel, push) {
+    imageViewer.close(false);
     state.path = rel || '/';
     state.query = '';
     $('search-input').value = '';
@@ -469,7 +485,11 @@
       trigger = document.createElement('a');
       trigger.className = 'name-link';
       trigger.href = downloadUrl(rel);
-      trigger.setAttribute('download', item.name);
+      if (window.FileImageViewer.isImage(item.name)) {
+        var previewLink = new URL(location.href); previewLink.searchParams.set('path', state.path); previewLink.searchParams.set('image', rel);
+        trigger.href = previewLink.href;
+        trigger.addEventListener('click', function (event) { event.preventDefault(); imageViewer.open(rel, previewEntries); });
+      } else trigger.setAttribute('download', item.name);
     }
     trigger.textContent = item.name;
     trigger.title = item.name;
@@ -517,7 +537,7 @@
     }
     row.appendChild(actions);
 
-    // 整行都可点：目录进入、文件下载，移动端可点面积更大
+    // 整行都可点：目录进入、图片预览、其它文件下载。
     row.addEventListener('click', function (ev) {
       if (ev.target.closest('.row-actions') || ev.target.closest('.name-btn') || ev.target.closest('.name-link')) return;
       trigger.click();
@@ -538,6 +558,7 @@
       if (state.sort === 'size' && first.type !== 'dir' && first.size !== second.size) return second.size - first.size;
       return first.name.localeCompare(second.name, 'zh-CN', { numeric: true });
     });
+    previewEntries = visible.filter(function (item) { return item.type !== 'dir' && window.FileImageViewer.isImage(item.name); }).map(function (item) { return joinPath(state.path, item.name); });
     $('search-clear').classList.toggle('hidden', !state.query);
     $('list-count').textContent = query ? visible.length + ' / ' + entries.length + ' 项' : entries.length + ' 项';
     if (query && !visible.length) {
@@ -584,6 +605,8 @@
       state.entries = data.entries || [];
       renderUsage(data.usage);
       renderList(state.entries);
+      var previewPath = new URLSearchParams(location.search).get('image');
+      if (previewPath) imageViewer.open(previewPath, previewEntries, false);
     } catch (err) {
       if (request !== listRequest) return;
       state.entries = [];
