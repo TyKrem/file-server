@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-User=root
-Group=root
+User=file-server
+Group=file-server
 # 登录权限由统一会话校验，文件目录和配额在本单元配置。
 EnvironmentFile=/etc/auth-session.env
 Environment=FILE_HOST=127.0.0.1
@@ -17,6 +17,16 @@ Restart=always
 RestartSec=3
 NoNewPrivileges=true
 PrivateTmp=true
+UMask=0077
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/file-server/root /opt/file-server/data
+CapabilityBoundingSet=
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 
 [Install]
 WantedBy=multi-user.target
