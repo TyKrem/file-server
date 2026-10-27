@@ -69,6 +69,16 @@
     return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
+  function fmtDuration(seconds) {
+    if (!isFinite(seconds) || seconds <= 0) return '';
+    if (seconds < 60) return Math.ceil(seconds) + ' 秒';
+    var minutes = Math.ceil(seconds / 60);
+    if (minutes < 60) return minutes + ' 分钟';
+    var hours = Math.floor(minutes / 60);
+    var rest = minutes % 60;
+    return hours + ' 小时' + (rest ? ' ' + rest + ' 分钟' : '');
+  }
+
   function joinPath(dir, name) {
     return dir === '/' ? '/' + name : dir + '/' + name;
   }
@@ -737,10 +747,28 @@
 
   /* ---------- 上传 ---------- */
 
-  function showProgress(text, ratio) {
+  function showProgress(text, ratio, current) {
+    var percent = Math.max(0, Math.min(100, Number(ratio || 0) * 100));
+    var percentText = percent.toFixed(percent < 10 && percent > 0 ? 1 : 0) + '%';
     $('upload-box').classList.remove('hidden');
     $('upload-text').textContent = text;
-    $('upload-fill').style.width = Math.max(0, Math.min(100, ratio * 100)) + '%';
+    $('upload-percent').textContent = percentText;
+    $('upload-fill').style.width = percent + '%';
+    $('upload-track').setAttribute('aria-valuenow', percent.toFixed(1));
+
+    var details = [];
+    if (current && isFinite(current.loaded) && isFinite(current.total) && current.total > 0) {
+      details.push(fmtBytes(current.loaded) + ' / ' + fmtBytes(current.total));
+    }
+    if (current && isFinite(current.rate) && current.rate > 0) {
+      details.push('平均速度 ' + fmtBytes(current.rate) + '/s');
+      if (current.loaded < current.total) details.push('剩余约 ' + fmtDuration((current.total - current.loaded) / current.rate));
+    } else if (current && current.loaded > 0) {
+      details.push('正在计算速度…');
+    }
+    $('upload-meta').textContent = details.filter(Boolean).join(' · ') || '正在准备传输';
+    $('upload-track').setAttribute('aria-valuetext', percentText +
+      (current && current.rate > 0 ? '，平均速度 ' + fmtBytes(current.rate) + '每秒' : ''));
   }
 
   function hideProgress() {
@@ -751,11 +779,30 @@
   function uploadOne(file, dir, onProgress) {
     return new Promise(function (resolve, reject) {
       var xhr = new XMLHttpRequest();
+      var startedAt = 0;
+      function publishProgress(loaded, total) {
+        var elapsed = startedAt ? (performance.now() - startedAt) / 1000 : 0;
+        var safeTotal = total > 0 ? total : file.size;
+        var rate = loaded > 0 && elapsed >= 0.25 ? loaded / elapsed : 0;
+        onProgress({
+          loaded: loaded,
+          total: safeTotal,
+          ratio: safeTotal > 0 ? loaded / safeTotal : 0,
+          rate: rate,
+        });
+      }
       // 凭 Cookie 放行，不额外带头
       xhr.open('POST', '/api/upload?path=' + encodeURIComponent(dir));
       xhr.setRequestHeader('X-File-Name', encodeURIComponent(file.name));
+      xhr.upload.onloadstart = function () {
+        startedAt = performance.now();
+        publishProgress(0, file.size);
+      };
       xhr.upload.onprogress = function (ev) {
-        if (ev.lengthComputable) onProgress(ev.loaded / ev.total);
+        publishProgress(ev.loaded, ev.lengthComputable ? ev.total : file.size);
+      };
+      xhr.upload.onload = function () {
+        publishProgress(file.size, file.size);
       };
       xhr.onload = function () {
         var data = null;
@@ -783,8 +830,12 @@
       var file = files[i];
       var index = i;
       try {
-        await uploadOne(file, dir, function (ratio) {
-          showProgress('上传中 ' + (index + 1) + '/' + total + ' · ' + file.name, (finished + ratio) / total);
+        await uploadOne(file, dir, function (current) {
+          showProgress(
+            '上传中 ' + (index + 1) + '/' + total + ' · ' + file.name,
+            (finished + current.ratio) / total,
+            current
+          );
         });
         finished++;
       } catch (err) {

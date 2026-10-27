@@ -162,15 +162,37 @@ h1 { margin: 9px 0 8px; font-size: 30px; font-weight: 650; letter-spacing: -1px;
   box-shadow: var(--shadow);
 }
 .upload-text {
-  margin-bottom: 6px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
 }
-.upload-track { height: 5px; border-radius: 6px; background: var(--line-soft); overflow: hidden; }
+.upload-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.upload-heading .upload-text { flex: 1; min-width: 0; }
+.upload-percent {
+  flex: none;
+  min-width: 42px;
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.upload-track { height: 7px; border-radius: 6px; background: var(--line-soft); overflow: hidden; }
 .upload-fill { height: 100%; width: 0; background: var(--accent); transition: width .15s linear; }
+.upload-meta {
+  margin-top: 7px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+}
 
 /* ---------- 提示 ---------- */
 .toast {
